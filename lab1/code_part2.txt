@@ -1,0 +1,440 @@
+## collatz.cpp
+
+```cpp
+#include <iostream>
+#include "Vcollatz.h"
+#include <verilated.h>
+#include <verilated_vcd_c.h>
+
+int main(int argc, const char ** argv, const char ** env) {
+  Verilated::commandArgs(argc, argv);
+
+  // Treat the argument on the command-line as the place to start
+  int n;
+  if (argc > 1 && argv[1][0] != '+') n = atoi(argv[1]);
+  else n = 7; // Default
+
+  Vcollatz * dut = new Vcollatz;  // Instantiate the collatz module
+
+  // Enable dumping a VCD file
+  
+  Verilated::traceEverOn(true);
+  VerilatedVcdC * tfp = new VerilatedVcdC;
+  dut->trace(tfp, 99);
+  tfp->open("collatz.vcd");
+
+  // Initial values
+  
+  dut->go = 0;
+  dut->n = n;
+
+  std::cout << dut->n; // Print the starting value of the sequence
+
+  bool last_clk = true;
+  int time;
+  for (time = 0 ; time < 10000 ; time += 10) {
+    dut->clk = ((time % 20) >= 10) ? 1 : 0; // Simulate a 50 MHz clock
+    if (time == 20) dut->go = 1; // Pulse "go" for two cycles
+    if (time == 60) dut->go = 0;
+
+    dut->eval();     // Run the simulation for a cycle
+    tfp->dump(time); // Write the VCD file for this cycle
+
+    if (dut->clk && !last_clk && !dut->go) {
+      if (time >= 60) std::cout << ' ' << dut->dout; // Print the next value
+      if (dut->done) break; // Stop once "done" appears
+    }
+    last_clk = dut->clk;
+  }
+
+  std::cout << std::endl;
+
+  // Once "done" is received, run a few more clock cycles
+  
+  for (int k = 0 ; k < 4 ; k++, time += 10) {
+    dut->clk = ((time % 20) >= 10) ? 1 : 0;
+      dut->eval();
+      tfp->dump(time);
+  }
+  
+  tfp->close(); // Stop dumping the VCD file
+  delete tfp;
+
+  dut->final(); // Stop the simulation
+  delete dut;
+
+  return 0;
+}
+
+
+```
+
+## hex7seg.cpp
+
+```cpp
+#include <iostream>
+#include <iomanip>
+#include "Vhex7seg.h"
+#include <verilated.h>
+
+unsigned char expected[] = { 0x40, 0x79, 0x24, 0x30,   // 0 - 3
+			     0x19, 0x12, 0x02, 0x78,   // 4 - 7
+			     0x00, 0x10, 0x08, 0x03,   // 8 - B
+			     0x46, 0x21, 0x06, 0x0e }; // C - F
+
+int main(int argc, const char ** argv, const char ** env) {
+  int exitcode = 0;
+  
+  Verilated::commandArgs(argc, argv);
+
+  Vhex7seg * dut = new Vhex7seg;  // Instantiate the collatz module
+
+  for (int i = 0 ; i < 16 ; i++) {
+    dut->a = i;
+    dut->eval();
+    std::cout << std::hex << std::setfill('0') << std::setw(1) << (int) dut->a;
+    std::cout << ' ' <<  std::setfill('0') << std::setw(2) << (int) dut->y;
+    if (dut->y == expected[i])
+      std::cout << " OK";
+    else {
+      std::cout << " INCORRECT expected " << std::setfill('0') << std::setw(2)
+			<< (int) expected[i];
+      exitcode = 1;
+    }
+    std::cout << std::endl;
+  }
+  
+  dut->final(); // Stop the simulation
+  delete dut;
+
+  return exitcode;
+}
+
+
+```
+
+## range.cpp
+
+```cpp
+#include <iostream>
+#include "Vrange.h"
+#include <verilated.h>
+#include <verilated_vcd_c.h>
+
+int main(int argc, const char ** argv, const char ** env) {
+  Verilated::commandArgs(argc, argv);
+
+  int n;
+  if (argc > 1 && argv[1][0] != '+')
+    n = atoi(argv[1]);
+  else
+    n = 7;
+
+  Vrange * dut = new Vrange;
+  
+  Verilated::traceEverOn(true);
+  VerilatedVcdC * tfp = new VerilatedVcdC;
+  dut->trace(tfp, 99);
+  tfp->open("range.vcd");
+
+  dut->clk = 0;
+  dut->go = 0;
+  dut->start = n;
+
+  int time = 0;
+  for ( ; time < 100000 ; time += 10) {
+    dut->clk = ((time % 20) >= 10) ? 1 : 0;
+    if (time == 0) dut->go = 1;
+    if (time == 40) dut->go = 0;
+
+    dut->eval();
+    
+    tfp->dump( time );
+
+    if (dut->done) break;
+  }
+
+  for (int i = 0 ; i < 16 ; i++) {
+    dut->clk = 0;
+    dut->start = i;
+    time += 10;
+    
+    dut->eval();
+    tfp->dump( time );
+
+    dut->clk = 1;
+    time += 10;
+    
+    dut->eval();
+    tfp->dump( time );
+
+    std::cout << i + n << ' ' << dut->count << std::endl;
+  }    
+  
+  tfp->close();
+  delete tfp;
+
+  dut->final();
+  delete dut;
+
+  return 0;
+}
+
+
+```
+
+## collatz.sv
+
+```systemverilog
+module collatz( input logic         clk,   // Clock
+			input logic 	    go,    // Load value from n; start iterating
+			input logic  [31:0] n,     // Start value; only read when go = 1
+			output logic [31:0] dout,  // Iteration value: true after go = 1
+			output logic 	    done); // True when dout reaches 1
+
+   /* Replace this comment and the code below with your solution */
+   always_ff @(posedge clk) begin
+      done <= go;
+      dout <= n;
+   end
+   /* Replace this comment and the code above with your solution */
+
+endmodule
+
+```
+
+## hex7seg.sv
+
+```systemverilog
+module hex7seg(input logic  [3:0] a,
+	       output logic [6:0] y);
+
+   /* Replace this comment and the code below it with your solution */
+   assign y = { a[2:0], a[3:0] };
+   
+endmodule
+
+```
+
+## lab1.sv
+
+```systemverilog
+// CSEE 4840 Lab 1: Run and Display Collatz Conjecture Iteration Counts
+//
+// Spring 2023
+//
+// By: <your name here>
+// Uni: <your uni here>
+
+module lab1( input logic        CLOCK_50,  // 50 MHz Clock input
+	     
+	     input logic [3:0] 	KEY, // Pushbuttons; KEY[0] is rightmost
+
+	     input logic [9:0] 	SW, // Switches; SW[0] is rightmost
+
+	     // 7-segment LED displays; HEX0 is rightmost
+	     output logic [6:0] HEX0, HEX1, HEX2, HEX3, HEX4, HEX5,
+
+	     output logic [9:0] LEDR // LEDs above the switches; LED[0] on right
+	     );
+
+   logic 				clk, go, done;   
+   logic [31:0] 			start;
+   logic [15:0] 			count;
+
+   logic [11:0] 			n;
+	   
+   assign clk = CLOCK_50;
+ 
+   range #(256, 8) // RAM_WORDS = 256, RAM_ADDR_BITS = 8)
+         r ( .* ); // Connect everything with matching names
+
+   // Replace this comment and the code below it with your own code;
+   // The code below is merely to suppress Verilator lint warnings
+   assign HEX0 = {KEY[2:0], KEY[3:0]};
+   assign HEX1 = SW[6:0];
+   assign HEX2 = {(n == 12'b0), (count == 16'b0) ^ KEY[1],
+		  go, done ^ KEY[0], SW[9:7]};
+   assign HEX3 = HEX0;
+   assign HEX4 = HEX1;
+   assign HEX5 = HEX2;
+   assign LEDR = SW;
+   assign go = KEY[0];
+   assign start = {SW[1:0], SW, SW, SW};
+   assign n = {SW[1:0], SW};
+	   
+	   
+  
+endmodule
+
+```
+
+## range.sv
+
+```systemverilog
+module range
+   #(parameter
+     RAM_WORDS = 16,            // Number of counts to store in RAM
+     RAM_ADDR_BITS = 4)         // Number of RAM address bits
+   (input logic         clk,    // Clock
+    input logic 	go,     // Read start and start testing
+    input logic [31:0] 	start,  // Number to start from or count to read
+    output logic 	done,   // True once memory is filled
+    output logic [15:0] count); // Iteration count once finished
+
+   logic 		cgo;    // "go" for the Collatz iterator
+   logic                cdone;  // "done" from the Collatz iterator
+   logic [31:0] 		n;      // number to start the Collatz iterator
+
+// verilator lint_off PINCONNECTEMPTY
+   
+   // Instantiate the Collatz iterator
+   collatz c1(.clk(clk),
+	      .go(cgo),
+	      .n(n),
+	      .done(cdone),
+	      .dout());
+
+   logic [RAM_ADDR_BITS - 1:0] 	 num;         // The RAM address to write
+   logic 			 running = 0; // True during the iterations
+
+   /* Replace this comment and the code below with your solution,
+      which should generate running, done, cgo, n, num, we, and din */
+   assign done = cdone;
+   assign cgo = go;
+   assign n = start;
+   assign din = 16'h0;
+   assign num = 0;
+   assign we = running;   
+   /* Replace this comment and the code above with your solution */
+
+   logic 			 we;                    // Write din to addr
+   logic [15:0] 		 din;                   // Data to write
+   logic [15:0] 		 mem[RAM_WORDS - 1:0];  // The RAM itself
+   logic [RAM_ADDR_BITS - 1:0] 	 addr;                  // Address to read/write
+
+   assign addr = we ? num : start[RAM_ADDR_BITS-1:0];
+   
+   always_ff @(posedge clk) begin
+      if (we) mem[addr] <= din;
+      count <= mem[addr];      
+   end
+
+endmodule
+	     
+
+```
+
+## Makefile
+
+```makefile
+.PHONY: default program clean hex7seg lint
+
+SVFILES = hex7seg.sv collatz.sv range.sv lab1.sv
+
+# Path to USB Blaster II firmware file in Quartus, only for openFPGALoader
+
+BLASTER-6810 = /opt/intelFPGA_lite/21.1/quartus/linux64/blaster_6810.hex
+
+default :
+	@echo "No target given. Try:"
+	@echo ""
+	@echo "make hex7seg"
+	@echo "make collatz.vcd"
+	@echo "make range.vcd"
+	@echo "make lint"
+	@echo "make output_files/lab1.sof"
+	@echo "make program"
+
+# Program the FPGA through the USB Blaster connection
+# It is the second thing on the JTAG chain (the HPS block is first), hence @2
+
+program : output_files/lab1.sof
+	quartus_pgm -c 1 -m jtag -o "p;output_files/lab1.sof@2"
+
+
+# Compile the project in Quartus
+
+output_files/lab1.sof : lab1.qpf $(SVFILES)
+	quartus_sh --flow compile lab1
+
+# Create the Quartus project files from a Tcl script
+
+lab1.qpf lab1.qsf lab1.sdc : de1-soc-project.tcl
+	quartus_sh -t de1-soc-project.tcl
+
+
+
+# Program the FPGA using openFPGALoader, an alternative to the
+# Quartus programmer
+
+program-open : output_files/lab1.svf
+	openFPGALoader -b de1Soc \
+	  --probe-firmware $(BLASTER-6810) \
+	  output_files/lab1.svf
+
+# Convert the .sof to to an .svf file for openFPGALoader
+
+output_files/lab1.svf : output_files/lab1.sof
+	quartus_cpf -c \
+		--operation p --voltage 3.3 --freq 24.0MHz \
+		output_files/lab1.sof output_files/lab1.svf
+
+
+
+# Quickly check the System Verilog files for errors
+
+lint :
+	for file in $(SVFILES); do \
+	verilator --lint-only -Wall $$file; done
+
+
+
+# Run Verilator simulations
+
+hex7seg : obj_dir/Vhex7seg
+	(obj_dir/Vhex7seg && echo "SUCCESS") || echo "FAILED"
+
+collatz.vcd : obj_dir/Vcollatz
+	obj_dir/Vcollatz
+
+range.vcd : obj_dir/Vrange
+	obj_dir/Vrange
+
+
+# Create Verilator simulations
+
+obj_dir/Vhex7seg : hex7seg.sv hex7seg.cpp
+	verilator -Wall -cc hex7seg.sv -exe hex7seg.cpp \
+		-top-module hex7seg
+	cd obj_dir && make -j -f Vhex7seg.mk
+
+obj_dir/Vcollatz : collatz.sv collatz.cpp
+	verilator -trace -Wall -cc collatz.sv -exe collatz.cpp \
+		-top-module collatz
+	cd obj_dir && make -j -f Vcollatz.mk
+
+obj_dir/Vrange : collatz.sv range.sv range.cpp
+	verilator -trace -Wall -cc collatz.sv range.sv -exe range.cpp \
+		-top-module range
+	cd obj_dir && make -j -f Vrange.mk
+
+
+# Create a .tar.gz file of the contents
+
+TARFILES = Makefile $(SVFILES) \
+	hex7seg.cpp \
+	collatz.cpp collatz.gtkw \
+	range.cpp range.gtkw range-done.gtkw \
+	de1-soc-project.tcl
+
+lab1.tar.gz : $(TARFILES)
+	cd .. && tar zchf lab1/lab1.tar.gz $(TARFILES:%=lab1/%)
+
+
+clean :
+	rm -rf obj_dir db incremental_db output_files \
+	lab1.qpf lab1.qsf lab1.sdc lab1.qws c5_pin_model_dump.txt
+
+
+```
