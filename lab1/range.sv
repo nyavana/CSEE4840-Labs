@@ -110,4 +110,26 @@ module range
    end
 
 endmodule
-	     
+
+/* make range.vcd
+
+obj_dir/Vrange
+7 17
+8 4
+9 20
+10 7
+11 15
+12 10
+13 10
+14 18
+15 18
+16 5
+17 13
+18 21
+19 21
+20 8
+21 8
+22 16
+
+*/
+
