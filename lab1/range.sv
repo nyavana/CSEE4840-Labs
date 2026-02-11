@@ -3,14 +3,14 @@ module range
      RAM_WORDS = 16,            // Number of counts to store in RAM
      RAM_ADDR_BITS = 4)         // Number of RAM address bits
    (input logic         clk,    // Clock
-    input logic 	go,     // Read start and start testing
+    input logic 	go,           // Read start and start testing
     input logic [31:0] 	start,  // Number to start from or count to read
-    output logic 	done,   // True once memory is filled
+    output logic 	done,         // True once memory is filled
     output logic [15:0] count); // Iteration count once finished
 
-   logic 		cgo;    // go for the Collatz iterator
+   logic 		cgo;             // go for the Collatz iterator
    logic                cdone;  // done from the Collatz iterator
-   logic [31:0] 	n;      // number to start the Collatz iterator
+   logic [31:0] 	n;            // number to start the Collatz iterator
 
 // verilator lint_off PINCONNECTEMPTY
    
