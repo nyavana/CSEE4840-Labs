@@ -57,7 +57,10 @@ module range
          running    <= 1'b1;
          n_reg      <= start;
          num        <= '0;
-         din        <= 16'd1;
+         if (start <= 32'd1)
+            din        <= 16'd0;
+         else
+            din        <= 16'd1;
          wrote      <= 1'b0;
          start_next <= 1'b0;
 
@@ -81,9 +84,14 @@ module range
                running <= 1'b0;
                done    <= 1'b1; // pulse done once RAM is filled
             end else begin
+               logic [31:0] next_n;
+               next_n    = n_reg + 32'd1;
                num        <= num + 1'b1;
-               n_reg      <= n_reg + 32'd1;
-               din        <= 16'd1;
+               n_reg      <= next_n;
+               if (next_n <= 32'd1)
+                  din        <= 16'd0;
+               else
+                  din        <= 16'd1;
                start_next <= 1'b1; // start next Collatz run in the next cycle
             end
 
