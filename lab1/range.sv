@@ -8,8 +8,8 @@ module range
     output logic 	done,   // True once memory is filled
     output logic [15:0] count); // Iteration count once finished
 
-   logic 		cgo;    // "go" for the Collatz iterator
-   logic                cdone;  // "done" from the Collatz iterator
+   logic 		cgo;    // go for the Collatz iterator
+   logic                cdone;  // done from the Collatz iterator
    logic [31:0] 	n;      // number to start the Collatz iterator
 
 // verilator lint_off PINCONNECTEMPTY
@@ -26,12 +26,75 @@ module range
 
    /* Replace this comment and the code below with your solution,
       which should generate running, done, cgo, n, num, we, and din */
-   assign done = cdone;
-   assign cgo = go;
-   assign n = start;
-   assign din = 16'h0;
-   assign num = 0;
-   assign we = running;   
+   
+   // Extra stuff
+   logic start_next = 1'b0;  // to start the next cycle
+   logic wrote      = 1'b0;  // prevents repeated writes while cdone stays high
+   logic [31:0] n_reg;
+
+   // The last address we will write to (one less than the number of words), not sure about it
+   localparam logic [RAM_ADDR_BITS-1:0] LAST_ADDR = RAM_ADDR_BITS'(RAM_WORDS - 1);
+
+   // Start a new full sweep only when idle
+   logic start_now;
+   assign start_now = go && !running;
+
+   // Pulse Collatz for one cycle at the start, and once per subsequent value
+   assign cgo = start_now || start_next;
+
+   // Make sure Collatz sees the correct n on the same edge
+   assign n   = start_now ? start : n_reg;
+
+   // go high for one cycle when cdone first appears
+   assign we  = running && cdone && !wrote;
+
+   always_ff @(posedge clk) begin
+      // done is a pulse
+      done <= 1'b0;
+
+      // Start the first Collatz run when we see the go signal, and set up for subsequent runs
+      if (start_now) begin
+         running    <= 1'b1;
+         n_reg      <= start;
+         num        <= '0;
+         din        <= 16'd1;
+         wrote      <= 1'b0;
+         start_next <= 1'b0;
+
+      // During a run, we want to write the count when cdone goes high, 
+      // and then set up the next run on the following cycle
+      end else if (running) begin
+
+         // Clear the cycle restart pulse after it has been used
+         if (start_next) begin
+            start_next <= 1'b0;
+            wrote      <= 1'b0; // ready to detect the next completion
+         end
+
+         if (we) begin
+            // A write will occur on this clock edge
+            wrote <= 1'b1;
+
+            // If we've just written to the last address, we're done. 
+            // Otherwise, set up for the next Collatz run.
+            if (num == LAST_ADDR) begin
+               running <= 1'b0;
+               done    <= 1'b1; // pulse done once RAM is filled
+            end else begin
+               num        <= num + 1'b1;
+               n_reg      <= n_reg + 32'd1;
+               din        <= 16'd1;
+               start_next <= 1'b1; // start next Collatz run in the next cycle
+            end
+
+         // Ifnot writing, but Collatz just finished, set up for the next run
+         end else if (!cdone && !start_next) begin
+            // Count how many terms we've seen (starts at 1)
+            din <= din + 16'd1;
+         end
+      end
+   end
+
    /* Replace this comment and the code above with your solution */
 
    logic 			 we;                    // Write din to addr
