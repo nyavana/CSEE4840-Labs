@@ -11,8 +11,8 @@ module collatz( input logic         clk,   // Clock
             // Restart from n
             dout <= n;
 
-            // Stop if n is already 1, otherwise start iterating
-            done <= (n == 32'd1);
+            // Stop if n is already 0 or 1, otherwise start iterating
+            done <= (n <= 32'd1);
         end
 
         else if (!done) begin
