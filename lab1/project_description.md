@@ -95,10 +95,10 @@ output logic [15:0] count); // Iteration count data once finished
 The two compile-time parameters RAM_WORDS and RAM_ADDR_BITS set the size of thememory in which the iteration counts should be stored.
 The go signal should tell the module to read the start input and start generating Collatziterations from that number. The number of iterations it takes to reach 1 starting from startshould be written into address 0 in ram; the number of iterations from start $^ { + 1 }$ should bewritten into address 1, etc. Finally, done should be asserted when the ram is filled.
 Once done is asserted, applying an address to start should read the memory from thataddress and present it on count in the next cycle.
-Fill in the skeleton range.sv file provided. While you may modify anything you want exceptthe interface to the module, we suggest you use the ram and internal signals provided.
+Fill in the skeleton range.sv file provided. While you may modify anything you want except the interface to the module, we suggest you use the ram and internal signals provided.
 We have supplied a testbench file range.cpp that provides the clock, go, and start signals,then waits for done before reading out the number of iterations observed by applyingdifferent values of start to read the value out through the count signal.
 As before, make range.vcd will compile the simulator, run the testbench, print the iterationcounts that are written to memory, and write the range.vcd file.
-Below is the timing diagram of our solution as it starts; your solution only has to obey theprotocol at the interface (clk, go, start, done, and count).
+Below is the timing diagram of our solution as it starts; your solution only has to obey the protocol at the interface (clk, go, start, done, and count).
 ![image](/652294a0436a4f6378ddc735fda9c6c5be20c042e7cdaf1354fb266d73ddfddf.jpg)
 
 The go input switches running to true; loads n with the value on start; resets num, the ramaddress, to 0; sets din, the iteration count, to 1; and pulses cgo high for a cycle to start theCollatz iterator module.
@@ -167,6 +167,11 @@ Use your hex7seg module to make the leftmost three seven-segment displays show t
 For example, if you enter 7 (in binary) on the switches and press key[3], the display shouldshow 007011, which indicates $n = 7$ takes 17 iterations (in decimal).
 Make it so that the rightmost buttons, key[0] and key[1] increment and decrement thevalue of $n$ being displayed. Make it so holding them makes the value change about 5 times asecond, e.g., by using a 22-bit counter running off the 50 MHz clock and only changing thevalue when this counter wraps around. The lowest $n$ should always be set by the switches;the buttons should just control which number (between $n$ and $n + 2 5 5$ ) is being read out.
 Make it so key[2] (second to left) resets the difference between the $n$ displayed and thevalue on the switches.
+
+Also, there should be an indicator when calculation is finished after pressing key[3]. Now, it need to flash all LED once, from LEDR[9] to LEDR[0] to indicate that calculation is finished
+
+At last, make sure there is no misregirtration issue. The testbench requres pressing one button from either key[0] or key[1] rapidly, expected result is the incrementation and decrementation from screen should reflect result in real time. when pressing one of the key very rapidly, all input is registered.
+
 # Demonstrate Your Working System
 Every team needs to demonstrate their lab 1 design to a ta. The main objective of the demois to test the user interface, so it will focus on the buttons, switches, and seven-segmentdisplays. We will check the Collatz values from your submitted code.
 You can demonstrate your working system during ta office hours.
@@ -181,4 +186,18 @@ We will check the following input and output during the demo:
 – multiple button press
 • indication that range is complete
 This rubric deliberately does not specify exactly what your system should do in each ofthese cases because we want you to think about what “the right thing” is according to whata person would expect. For many of these actions there are multiple appropriate responses.Consider what you would expect from each action, and design your system accordingly.The tas are happy to discuss what is “reasonable” behavior if you have questions.
-10
+
+- Here is a sample rubic:
+
+|  |  |  |
+|----|----|----|
+| Action | Check | Observed |
+| Set SW\[9:0\] to 00000011Press KEY\[3\]seven-segment display shows 007011 | there is an indication that range is completeseven-segment display correct | Correct but no indication range calculation is completed |
+| Press KEY\[0\] 5 times at a normal pace seven-segment display shows 00C00A | each keypress increments nno missed keypresses or jumps | Missing Some Presses |
+| Press KEY\[1\] 3 times at a normal pace seven-segment display shows 009014 | each keypress decrements nno missed keypresses or jumps | Missing Some Presses |
+| Press KEY\[2\]seven-segment display shows 007011 | value of n resets to switch valueseven-segment display correct | Correct |
+| Press KEY\[0\] 5 times fast seven-segment display shows 00C00A | each keypress increments nno missed keypresses or jumps | Missing Some Presses |
+| Press KEY\[0\] 5 times slowly seven-segment display shows 01100D | each keypress increments nno missed keypresses or jumps | Correct |
+| Press and hold KEY\[1\] a bit longer than it takes for the hex display to reach the edge of range | display decrements at a human-readable pacen never goes below the switch valuecan either stop at 007 or wrap to 106 and keep decreasing | Stops at end of range, decrement too fast |
+| Press KEY\[0\] and KEY\[1\] at the same time | behave as if one button pressed, ordo nothing, orflicker once | Always acts as Key\[0\] |
+| Set SW\[9:0\] to 1100000111Press KEY\[3\]seven-segment display shows 307099 | there is an indication that range is completeseven-segment display correct | Correct but no indication range is complete. |
