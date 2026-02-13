@@ -1,9 +1,11 @@
 // CSEE 4840 Lab 1: Run and Display Collatz Conjecture Iteration Counts
 //
-// Spring 2025
+// Spring 2026
 //
-// By: <your name here>
-// Uni: <your uni here>
+// By: Hao Cai , Chenhao Yang
+// Uni: hc3612 , cy2822
+//
+// Version without press-and-hold auto-repeat (simple flat 5 Hz repeat)
 
 module lab1( input logic        CLOCK_50,  // 50 MHz Clock input
 
@@ -21,16 +23,44 @@ module lab1( input logic        CLOCK_50,  // 50 MHz Clock input
    assign clk = CLOCK_50;
 
    // ---- Synchronize active-low KEY inputs (2-stage synchronizer) ----
-   logic [3:0] key_s1, key_s2, key_prev;
+   logic [3:0] key_s1, key_s2;
    always_ff @(posedge clk) begin
-      key_s1   <= KEY;
-      key_s2   <= key_s1;
-      key_prev <= key_s2;
+      key_s1 <= KEY;
+      key_s2 <= key_s1;
    end
 
-   // Falling edge = button press (active-low buttons)
+   // ---- Debounce: require stable ~80ms before accepting change ----
+   localparam [21:0] DB_THRESH = 22'd3_999_999;  // 80 ms at 50 MHz
+   logic [3:0]  key_db = 4'b1111;                // debounced (init: all released)
+   logic [21:0] db0 = 22'd0, db1 = 22'd0, db2 = 22'd0, db3 = 22'd0;
+
+   always_ff @(posedge clk) begin
+      // KEY[0]
+      if (key_s2[0] == key_db[0])                                    db0 <= 22'd0;
+      else if (db0 == DB_THRESH) begin db0 <= 22'd0; key_db[0] <= key_s2[0]; end
+      else                                                           db0 <= db0 + 22'd1;
+      // KEY[1]
+      if (key_s2[1] == key_db[1])                                    db1 <= 22'd0;
+      else if (db1 == DB_THRESH) begin db1 <= 22'd0; key_db[1] <= key_s2[1]; end
+      else                                                           db1 <= db1 + 22'd1;
+      // KEY[2]
+      if (key_s2[2] == key_db[2])                                    db2 <= 22'd0;
+      else if (db2 == DB_THRESH) begin db2 <= 22'd0; key_db[2] <= key_s2[2]; end
+      else                                                           db2 <= db2 + 22'd1;
+      // KEY[3]
+      if (key_s2[3] == key_db[3])                                    db3 <= 22'd0;
+      else if (db3 == DB_THRESH) begin db3 <= 22'd0; key_db[3] <= key_s2[3]; end
+      else                                                           db3 <= db3 + 22'd1;
+   end
+
+   // Falling edge on debounced signal = confirmed button press
+   logic [3:0] key_prev;
+   always_ff @(posedge clk) begin
+      key_prev <= key_db;
+   end
+
    logic [3:0] key_fell;
-   assign key_fell = key_prev & ~key_s2;
+   assign key_fell = key_prev & ~key_db;
 
    // ---- Range module signals ----
    logic        go, done;
@@ -57,12 +87,12 @@ module lab1( input logic        CLOCK_50,  // 50 MHz Clock input
                        .count(count));
 
    // ---- Auto-repeat counter for KEY[0] / KEY[1] ----
-   // 50 MHz / 10,000,000 = 5 Hz repeat rate
+   // 50 MHz / 10,000,000 = 5 Hz repeat rate (flat, no initial delay)
    logic [23:0] rep_cnt = 24'd0;
    logic        rep_tick;
 
    always_ff @(posedge clk) begin
-      if (key_s2[0] & key_s2[1])          // neither button held
+      if (key_db[0] & key_db[1])          // neither button held
          rep_cnt <= 24'd0;
       else if (rep_cnt == 24'd9_999_999)   // wrap at 5 Hz
          rep_cnt <= 24'd0;
@@ -73,8 +103,8 @@ module lab1( input logic        CLOCK_50,  // 50 MHz Clock input
 
    // ---- Increment / decrement actions (KEY[0] has priority) ----
    logic inc, dec;
-   assign inc = key_fell[0] | (~key_s2[0] & rep_tick);
-   assign dec = (key_fell[1] | (~key_s2[1] & rep_tick)) & ~inc;
+   assign inc = key_fell[0] | (~key_db[0] & rep_tick);
+   assign dec = (key_fell[1] | (~key_db[1] & rep_tick)) & ~inc;
 
    // ---- Base and offset management ----
    always_ff @(posedge clk) begin
