@@ -9,8 +9,10 @@ module lab1(
 
   logic clk;
   assign clk  = CLOCK_50;
-  assign LEDR[8:0] = SW[8:0];  // Show switches on LEDR[8:0]
-  // LEDR[9] will flash when computation is complete (assigned below)
+  // LED sweep animation state for completion indicator
+  logic        sweep_active = 1'b0;  // True during sweep animation
+  logic [3:0]  sweep_pos    = 4'd9;  // Current LED position (9 down to 0)
+  logic [21:0] sweep_timer  = 22'd0; // Timer for sweep speed (~80ms per step)
 
   // DE1-SoC pushbuttons are typically active-low (pressed = 0)
   logic btn_inc, btn_dec, btn_rst, btn_run;
@@ -59,6 +61,11 @@ module lab1(
   logic        inc_held = 1'b0;
   logic        dec_held = 1'b0;
 
+  // Press-edge detection for inc/dec buttons
+  logic inc_press, dec_press;
+  assign inc_press = inc_stable && !inc_stable_d;
+  assign dec_press = dec_stable && !dec_stable_d;
+
   // Track when the memory has been filled (since done is a pulse)
   logic filled  = 1'b0;
   logic filling = 1'b0;
@@ -74,9 +81,6 @@ module lab1(
   // Make a 2-cycle go pulse on run_edge
   logic [1:0] go_sh = 2'b00;
 
-  // Blink counter for completion indicator LED (slower than slow_ctr)
-  logic [24:0] blink_ctr = 25'd0;
-
   always_ff @(posedge clk) begin
     // default shift-down
     go_sh <= {1'b0, go_sh[1]};
@@ -84,7 +88,6 @@ module lab1(
     // free-running counters
     slow_ctr <= slow_ctr + 24'd1;
     tick_prev <= slow_ctr[23];
-    blink_ctr <= blink_ctr + 25'd1;
 
     // Button debouncing: require button to be stable for DEBOUNCE_CYCLES
     if (btn_inc) begin
@@ -148,20 +151,33 @@ module lab1(
       dec_hold_ctr <= 26'd0;
       inc_held <= 1'b0;
       dec_held <= 1'b0;
+      sweep_active <= 1'b0; // cancel any ongoing sweep
     end
 
-    // Latch "filled" when range finishes
+    // Latch "filled" when range finishes; start LED sweep
     if (done) begin
-      filling <= 1'b0;
-      filled  <= 1'b1;
+      filling      <= 1'b0;
+      filled       <= 1'b1;
+      sweep_active <= 1'b1;
+      sweep_pos    <= 4'd9;
+      sweep_timer  <= 22'd0;
+    end
+
+    // LED sweep animation: advance one LED per ~80ms
+    if (sweep_active) begin
+      if (sweep_timer == 22'd3_999_999) begin // 4M cycles = 80ms at 50 MHz
+        sweep_timer <= 22'd0;
+        if (sweep_pos == 4'd0)
+          sweep_active <= 1'b0;  // sweep finished
+        else
+          sweep_pos <= sweep_pos - 4'd1;
+      end else begin
+        sweep_timer <= sweep_timer + 22'd1;
+      end
     end
 
     // Button handling: only active when filled
     if (filled) begin
-      // Detect press edges on debounced stable signals
-      wire inc_press = inc_stable && !inc_stable_d;
-      wire dec_press = dec_stable && !dec_stable_d;
-
       // Single press on rising edge (prevents both buttons acting simultaneously)
       if (inc_press && !dec_stable && offset != 8'hFF) begin
         offset <= offset + 8'd1;
@@ -240,7 +256,12 @@ module lab1(
   hex7seg h4(.a(n_disp[7:4]),   .y(HEX4));
   hex7seg h5(.a(n_disp[11:8]),  .y(HEX5));
 
-  // Flash LEDR[9] when range computation is complete (uses bit 24 for ~1.5 Hz blink)
-  assign LEDR[9] = filled ? blink_ctr[24] : 1'b0;
+  // LED output: sweep animation on completion, otherwise show switches
+  always_comb begin
+    if (sweep_active)
+      LEDR = 10'd1 << sweep_pos;  // single LED lit, moving 9->0
+    else
+      LEDR = SW;                  // normal: show switch values
+  end
 
 endmodule
