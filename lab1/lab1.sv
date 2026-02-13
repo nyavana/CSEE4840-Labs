@@ -9,7 +9,8 @@ module lab1(
 
   logic clk;
   assign clk  = CLOCK_50;
-  assign LEDR = SW;
+  assign LEDR[8:0] = SW[8:0];  // Show switches on LEDR[8:0]
+  // LEDR[9] will flash when computation is complete (assigned below)
 
   // DE1-SoC pushbuttons are typically active-low (pressed = 0)
   logic btn_inc, btn_dec, btn_rst, btn_run;
@@ -35,10 +36,21 @@ module lab1(
   // Offset selects which result (0..255) we read out
   logic [7:0]  offset = 8'd0;
 
-  // Slow tick: about a few-to-~10 repeats/sec using a 22-bit counter
-  logic [21:0] slow_ctr = 22'd0;
+  // Slow tick: ~3 Hz for comfortable auto-repeat using a 24-bit counter
+  logic [23:0] slow_ctr = 24'd0;
   logic        tick;
-  assign tick = (slow_ctr == 22'd0); // true on wrap-around
+  logic        tick_prev = 1'b0;
+  // Detect 0->1 transition of bit 23 for ~3 Hz repeat rate
+  assign tick = slow_ctr[23] && !tick_prev;
+
+  // Button debouncing
+  localparam logic [19:0] DEBOUNCE_CYCLES = 20'd1_000_000; // 20ms at 50 MHz
+  logic [19:0] inc_debounce = 20'd0;
+  logic [19:0] dec_debounce = 20'd0;
+  logic        inc_stable = 1'b0;
+  logic        dec_stable = 1'b0;
+  logic        inc_stable_d = 1'b0;
+  logic        dec_stable_d = 1'b0;
 
   // Hold detection for inc/dec: short press = single step, long press = repeat
   localparam logic [25:0] HOLD_CYCLES = 26'd50_000_000; // ~1 s at 50 MHz
@@ -46,8 +58,6 @@ module lab1(
   logic [25:0] dec_hold_ctr = 26'd0;
   logic        inc_held = 1'b0;
   logic        dec_held = 1'b0;
-  logic        inc_d = 1'b0;
-  logic        dec_d = 1'b0;
 
   // Track when the memory has been filled (since done is a pulse)
   logic filled  = 1'b0;
@@ -63,16 +73,43 @@ module lab1(
 
   // Make a 2-cycle go pulse on run_edge
   logic [1:0] go_sh = 2'b00;
+
+  // Blink counter for completion indicator LED (slower than slow_ctr)
+  logic [24:0] blink_ctr = 25'd0;
+
   always_ff @(posedge clk) begin
     // default shift-down
     go_sh <= {1'b0, go_sh[1]};
 
-    // free-running slow counter
-    slow_ctr <= slow_ctr + 22'd1;
+    // free-running counters
+    slow_ctr <= slow_ctr + 24'd1;
+    tick_prev <= slow_ctr[23];
+    blink_ctr <= blink_ctr + 25'd1;
 
-    // Button edge tracking for inc/dec
-    inc_d <= btn_inc;
-    dec_d <= btn_dec;
+    // Button debouncing: require button to be stable for DEBOUNCE_CYCLES
+    if (btn_inc) begin
+      if (inc_debounce < DEBOUNCE_CYCLES)
+        inc_debounce <= inc_debounce + 20'd1;
+      else
+        inc_stable <= 1'b1;
+    end else begin
+      inc_debounce <= 20'd0;
+      inc_stable <= 1'b0;
+    end
+
+    if (btn_dec) begin
+      if (dec_debounce < DEBOUNCE_CYCLES)
+        dec_debounce <= dec_debounce + 20'd1;
+      else
+        dec_stable <= 1'b1;
+    end else begin
+      dec_debounce <= 20'd0;
+      dec_stable <= 1'b0;
+    end
+
+    // Track stable signal edges for single-press detection
+    inc_stable_d <= inc_stable;
+    dec_stable_d <= dec_stable;
 
     // If switches change, force a re-run (prevents mismatched base vs stored RAM)
     // Also resets offset back to 0.
@@ -85,6 +122,10 @@ module lab1(
       dec_hold_ctr <= 26'd0;
       inc_held <= 1'b0;
       dec_held <= 1'b0;
+      inc_debounce <= 20'd0;
+      dec_debounce <= 20'd0;
+      inc_stable <= 1'b0;
+      dec_stable <= 1'b0;
     end
 
     // KEY[2] resets displayed n back to the switch value (offset = 0)
@@ -102,7 +143,7 @@ module lab1(
       filled   <= 1'b0;
       filling  <= 1'b1;
       go_sh    <= 2'b11;   // 2-cycle pulse
-      slow_ctr <= 22'd0;   // optional: makes button repeat timing feel consistent
+      slow_ctr <= 24'd0;   // optional: makes button repeat timing feel consistent
       inc_hold_ctr <= 26'd0;
       dec_hold_ctr <= 26'd0;
       inc_held <= 1'b0;
@@ -115,44 +156,53 @@ module lab1(
       filled  <= 1'b1;
     end
 
-    // KEY[0]/KEY[1] short press: single step on release
+    // Button handling: only active when filled
     if (filled) begin
-      if (!btn_inc && inc_d) begin
-        if (!inc_held && !btn_dec && offset != 8'hFF)
-          offset <= offset + 8'd1;
-        inc_hold_ctr <= 26'd0;
-        inc_held <= 1'b0;
-      end else if (btn_inc && !inc_held) begin
+      // Detect press edges on debounced stable signals
+      wire inc_press = inc_stable && !inc_stable_d;
+      wire dec_press = dec_stable && !dec_stable_d;
+
+      // Single press on rising edge (prevents both buttons acting simultaneously)
+      if (inc_press && !dec_stable && offset != 8'hFF) begin
+        offset <= offset + 8'd1;
+      end else if (dec_press && !inc_stable && offset != 8'h00) begin
+        offset <= offset - 8'd1;
+      end
+
+      // Hold detection: track how long button has been stable-high
+      if (inc_stable) begin
         if (inc_hold_ctr >= HOLD_CYCLES)
           inc_held <= 1'b1;
         else
           inc_hold_ctr <= inc_hold_ctr + 26'd1;
+      end else begin
+        inc_hold_ctr <= 26'd0;
+        inc_held <= 1'b0;
       end
 
-      if (!btn_dec && dec_d) begin
-        if (!dec_held && !btn_inc && offset != 8'h00)
-          offset <= offset - 8'd1;
-        dec_hold_ctr <= 26'd0;
-        dec_held <= 1'b0;
-      end else if (btn_dec && !dec_held) begin
+      if (dec_stable) begin
         if (dec_hold_ctr >= HOLD_CYCLES)
           dec_held <= 1'b1;
         else
           dec_hold_ctr <= dec_hold_ctr + 26'd1;
+      end else begin
+        dec_hold_ctr <= 26'd0;
+        dec_held <= 1'b0;
+      end
+
+      // Auto-repeat on slow tick when held
+      if (tick) begin
+        if (inc_held && !dec_stable && offset != 8'hFF)
+          offset <= offset + 8'd1;
+        else if (dec_held && !inc_stable && offset != 8'h00)
+          offset <= offset - 8'd1;
       end
     end else begin
+      // Reset hold state when not filled
       inc_hold_ctr <= 26'd0;
       dec_hold_ctr <= 26'd0;
       inc_held <= 1'b0;
       dec_held <= 1'b0;
-    end
-
-    // Long press: repeat on slow tick
-    if (filled && tick) begin
-      if (inc_held && !btn_dec && offset != 8'hFF)
-        offset <= offset + 8'd1;
-      else if (dec_held && !btn_inc && offset != 8'h00)
-        offset <= offset - 8'd1;
     end
 
     // Track the last switch value for change detection.
@@ -189,5 +239,8 @@ module lab1(
   hex7seg h3(.a(n_disp[3:0]),   .y(HEX3));
   hex7seg h4(.a(n_disp[7:4]),   .y(HEX4));
   hex7seg h5(.a(n_disp[11:8]),  .y(HEX5));
+
+  // Flash LEDR[9] when range computation is complete (uses bit 24 for ~1.5 Hz blink)
+  assign LEDR[9] = filled ? blink_ctr[24] : 1'b0;
 
 endmodule
