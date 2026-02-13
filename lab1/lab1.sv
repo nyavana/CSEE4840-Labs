@@ -9,8 +9,11 @@ module lab1(
 
   logic clk;
   assign clk  = CLOCK_50;
-  assign LEDR[8:0] = SW[8:0];  // Show switches on LEDR[8:0]
-  // LEDR[9] will flash when computation is complete (assigned below)
+
+  // Show switches on LEDR, but reserve LEDR[5] for completion indicator
+  assign LEDR[4:0] = SW[4:0];
+  assign LEDR[9:6] = SW[9:6];
+  // LEDR[5] will flash when computation is complete (assigned at bottom)
 
   // DE1-SoC pushbuttons are typically active-low (pressed = 0)
   logic btn_inc, btn_dec, btn_rst, btn_run;
@@ -44,7 +47,7 @@ module lab1(
   assign tick = slow_ctr[23] && !tick_prev;
 
   // Button debouncing
-  localparam logic [19:0] DEBOUNCE_CYCLES = 20'd1_000_000; // 20ms at 50 MHz
+  localparam logic [19:0] DEBOUNCE_CYCLES = 20'd250_000; // 5ms at 50 MHz (reduced for faster response)
   logic [19:0] inc_debounce = 20'd0;
   logic [19:0] dec_debounce = 20'd0;
   logic        inc_stable = 1'b0;
@@ -74,8 +77,11 @@ module lab1(
   // Make a 2-cycle go pulse on run_edge
   logic [1:0] go_sh = 2'b00;
 
-  // Blink counter for completion indicator LED (slower than slow_ctr)
-  logic [24:0] blink_ctr = 25'd0;
+  // Flash counter for completion indicator on LEDR[5]
+  // Flash for ~0.5 seconds when done pulse occurs
+  localparam logic [24:0] FLASH_DURATION = 25'd25_000_000; // 0.5s at 50 MHz
+  logic [24:0] flash_ctr = 25'd0;
+  logic        flashing = 1'b0;
 
   always_ff @(posedge clk) begin
     // default shift-down
@@ -84,7 +90,17 @@ module lab1(
     // free-running counters
     slow_ctr <= slow_ctr + 24'd1;
     tick_prev <= slow_ctr[23];
-    blink_ctr <= blink_ctr + 25'd1;
+
+    // Flash logic: start flashing when done pulse occurs
+    if (done) begin
+      flashing <= 1'b1;
+      flash_ctr <= 25'd0;
+    end else if (flashing) begin
+      if (flash_ctr < FLASH_DURATION)
+        flash_ctr <= flash_ctr + 25'd1;
+      else
+        flashing <= 1'b0;
+    end
 
     // Button debouncing: require button to be stable for DEBOUNCE_CYCLES
     if (btn_inc) begin
@@ -158,14 +174,12 @@ module lab1(
 
     // Button handling: only active when filled
     if (filled) begin
-      // Detect press edges on debounced stable signals
-      wire inc_press = inc_stable && !inc_stable_d;
-      wire dec_press = dec_stable && !dec_stable_d;
-
-      // Single press on rising edge (prevents both buttons acting simultaneously)
-      if (inc_press && !dec_stable && offset != 8'hFF) begin
+      // Single press on rising edge - both can trigger independently
+      // (if both pressed simultaneously, one increments and one decrements = net zero change)
+      if (inc_stable && !inc_stable_d && offset != 8'hFF) begin
         offset <= offset + 8'd1;
-      end else if (dec_press && !inc_stable && offset != 8'h00) begin
+      end
+      if (dec_stable && !dec_stable_d && offset != 8'h00) begin
         offset <= offset - 8'd1;
       end
 
@@ -240,7 +254,7 @@ module lab1(
   hex7seg h4(.a(n_disp[7:4]),   .y(HEX4));
   hex7seg h5(.a(n_disp[11:8]),  .y(HEX5));
 
-  // Flash LEDR[9] when range computation is complete (uses bit 24 for ~1.5 Hz blink)
-  assign LEDR[9] = filled ? blink_ctr[24] : 1'b0;
+  // Flash LEDR[5] once when range computation completes
+  assign LEDR[5] = flashing ? 1'b1 : 1'b0;
 
 endmodule
