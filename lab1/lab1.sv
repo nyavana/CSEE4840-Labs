@@ -29,38 +29,39 @@ module lab1( input logic        CLOCK_50,  // 50 MHz Clock input
       key_s2 <= key_s1;
    end
 
-   // ---- Debounce: require stable ~80ms before accepting change ----
-   localparam [21:0] DB_THRESH = 22'd3_999_999;  // 80 ms at 50 MHz
-   logic [3:0]  key_db = 4'b1111;                // debounced (init: all released)
-   logic [21:0] db0 = 22'd0, db1 = 22'd0, db2 = 22'd0, db3 = 22'd0;
+   // ---- Cooldown-based edge filter (10ms) ----
+   // Accept first transition IMMEDIATELY, then lock out 10 ms.
+   localparam [18:0] COOLDOWN = 19'd499_999;    // 10 ms at 50 MHz
+   logic [3:0]  key_clean = 4'b1111;            // filtered state (init: released)
+   logic [18:0] cd0 = 19'd0, cd1 = 19'd0, cd2 = 19'd0, cd3 = 19'd0;
 
    always_ff @(posedge clk) begin
       // KEY[0]
-      if (key_s2[0] == key_db[0])                                    db0 <= 22'd0;
-      else if (db0 == DB_THRESH) begin db0 <= 22'd0; key_db[0] <= key_s2[0]; end
-      else                                                           db0 <= db0 + 22'd1;
+      if (cd0 > 19'd0)                              cd0 <= cd0 - 19'd1;
+      else if (key_s2[0] != key_clean[0]) begin      cd0 <= COOLDOWN;
+                                                     key_clean[0] <= key_s2[0]; end
       // KEY[1]
-      if (key_s2[1] == key_db[1])                                    db1 <= 22'd0;
-      else if (db1 == DB_THRESH) begin db1 <= 22'd0; key_db[1] <= key_s2[1]; end
-      else                                                           db1 <= db1 + 22'd1;
+      if (cd1 > 19'd0)                              cd1 <= cd1 - 19'd1;
+      else if (key_s2[1] != key_clean[1]) begin      cd1 <= COOLDOWN;
+                                                     key_clean[1] <= key_s2[1]; end
       // KEY[2]
-      if (key_s2[2] == key_db[2])                                    db2 <= 22'd0;
-      else if (db2 == DB_THRESH) begin db2 <= 22'd0; key_db[2] <= key_s2[2]; end
-      else                                                           db2 <= db2 + 22'd1;
+      if (cd2 > 19'd0)                              cd2 <= cd2 - 19'd1;
+      else if (key_s2[2] != key_clean[2]) begin      cd2 <= COOLDOWN;
+                                                     key_clean[2] <= key_s2[2]; end
       // KEY[3]
-      if (key_s2[3] == key_db[3])                                    db3 <= 22'd0;
-      else if (db3 == DB_THRESH) begin db3 <= 22'd0; key_db[3] <= key_s2[3]; end
-      else                                                           db3 <= db3 + 22'd1;
+      if (cd3 > 19'd0)                              cd3 <= cd3 - 19'd1;
+      else if (key_s2[3] != key_clean[3]) begin      cd3 <= COOLDOWN;
+                                                     key_clean[3] <= key_s2[3]; end
    end
 
-   // Falling edge on debounced signal = confirmed button press
-   logic [3:0] key_prev;
+   // Falling edge on filtered signal = confirmed press
+   logic [3:0] key_clean_d;
    always_ff @(posedge clk) begin
-      key_prev <= key_db;
+      key_clean_d <= key_clean;
    end
 
    logic [3:0] key_fell;
-   assign key_fell = key_prev & ~key_db;
+   assign key_fell = key_clean_d & ~key_clean;
 
    // ---- Range module signals ----
    logic        go, done;
@@ -87,24 +88,35 @@ module lab1( input logic        CLOCK_50,  // 50 MHz Clock input
                        .count(count));
 
    // ---- Auto-repeat counter for KEY[0] / KEY[1] ----
-   // 50 MHz / 10,000,000 = 5 Hz repeat rate (flat, no initial delay)
-   logic [23:0] rep_cnt = 24'd0;
+   // 500 ms initial delay, then 5 Hz (200 ms) repeat
+   logic [24:0] rep_cnt      = 25'd0;
+   logic        initial_wait = 1'b1;
    logic        rep_tick;
 
    always_ff @(posedge clk) begin
-      if (key_db[0] & key_db[1])          // neither button held
-         rep_cnt <= 24'd0;
-      else if (rep_cnt == 24'd9_999_999)   // wrap at 5 Hz
-         rep_cnt <= 24'd0;
-      else
-         rep_cnt <= rep_cnt + 24'd1;
+      if (key_s2[0] & key_s2[1]) begin        // neither button held (raw)
+         rep_cnt      <= 25'd0;
+         initial_wait <= 1'b1;
+      end else if (initial_wait) begin         // first hold: 500 ms delay
+         if (rep_cnt == 25'd24_999_999) begin
+            rep_cnt      <= 25'd0;
+            initial_wait <= 1'b0;
+         end else
+            rep_cnt <= rep_cnt + 25'd1;
+      end else begin                           // subsequent: 200 ms repeat
+         if (rep_cnt == 25'd9_999_999)
+            rep_cnt <= 25'd0;
+         else
+            rep_cnt <= rep_cnt + 25'd1;
+      end
    end
-   assign rep_tick = (rep_cnt == 24'd9_999_999);
+   assign rep_tick = ( initial_wait && rep_cnt == 25'd24_999_999) |
+                     (!initial_wait && rep_cnt == 25'd9_999_999);
 
    // ---- Increment / decrement actions (KEY[0] has priority) ----
    logic inc, dec;
-   assign inc = key_fell[0] | (~key_db[0] & rep_tick);
-   assign dec = (key_fell[1] | (~key_db[1] & rep_tick)) & ~inc;
+   assign inc = key_fell[0] | (~key_clean[0] & rep_tick);
+   assign dec = (key_fell[1] | (~key_clean[1] & rep_tick)) & ~inc;
 
    // ---- Base and offset management ----
    always_ff @(posedge clk) begin
