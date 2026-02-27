@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 /* Update SERVER_HOST to be the IP address of
@@ -35,6 +36,10 @@
 #define RECV_ROWS (RECV_BOTTOM_ROW - RECV_TOP_ROW + 1)
 
 #define INPUT_MAX_CHARS (INPUT_ROWS * SCREEN_COLS)
+
+#define REPEAT_DELAY_MS   500
+#define REPEAT_INTERVAL_MS 50
+#define USB_TIMEOUT_MS     50
 
 /*
  * References:
@@ -61,7 +66,22 @@ static char input_buf[INPUT_MAX_CHARS + 1];
 static size_t input_len = 0;
 static size_t cursor_pos = 0;
 
+static int caps_lock_active = 0;
+
+static uint8_t repeat_keycode = 0;
+static int     repeat_shifted = 0;
+static int     repeat_active = 0;
+static long    repeat_start_time = 0;
+static long    repeat_last_time = 0;
+
 void *network_thread_f(void *);
+
+static long time_ms(void)
+{
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (long)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+}
 
 static void clear_row_locked(int row)
 {
@@ -183,15 +203,20 @@ static void clear_input_rows_locked(void)
 static void draw_cursor_locked(void)
 {
   size_t visible_pos = cursor_pos;
-  int cursor_col;
+  int cursor_row, cursor_col;
 
-  if (visible_pos >= INPUT_MAX_CHARS && INPUT_MAX_CHARS > 0) {
+  if (visible_pos >= INPUT_MAX_CHARS) {
     visible_pos = INPUT_MAX_CHARS - 1;
   }
+
+  cursor_row = INPUT_TOP_ROW + (int)(visible_pos / SCREEN_COLS);
   cursor_col = (int)(visible_pos % SCREEN_COLS);
 
   draw_divider_locked();
-  fbputchar('^', DIVIDER_ROW, cursor_col);
+
+  if (cursor_row < SCREEN_ROWS) {
+    fbputchar('_', cursor_row, cursor_col);
+  }
 }
 
 static void render_input_locked(void)
@@ -363,6 +388,7 @@ static void send_current_input(void)
   input_len = 0;
   cursor_pos = 0;
   input_buf[0] = '\0';
+  repeat_active = 0;
   render_input_locked();
   pthread_mutex_unlock(&fb_lock);
 }
@@ -370,12 +396,16 @@ static void send_current_input(void)
 static int handle_new_key(uint8_t keycode, int shifted)
 {
   char c;
+  int effective_shifted;
 
   switch (keycode) {
   case 0x29: /* ESC */
     return 1;
   case 0x28: /* ENTER */
     send_current_input();
+    return 0;
+  case 0x39: /* CAPS LOCK */
+    caps_lock_active = !caps_lock_active;
     return 0;
   case 0x2a: /* BACKSPACE */
     if (backspace_char()) {
@@ -399,7 +429,13 @@ static int handle_new_key(uint8_t keycode, int shifted)
     }
     return 0;
   default:
-    c = keycode_to_ascii(keycode, shifted);
+    /* For letter keys, Caps Lock toggles uppercase */
+    if (keycode >= 0x04 && keycode <= 0x1d) {
+      effective_shifted = shifted || caps_lock_active;
+    } else {
+      effective_shifted = shifted;
+    }
+    c = keycode_to_ascii(keycode, effective_shifted);
     if (c != 0 && insert_char(c)) {
       pthread_mutex_lock(&fb_lock);
       render_input_locked();
@@ -415,18 +451,34 @@ static int process_keyboard_packet(const struct usb_keyboard_packet *packet,
   int i;
   int shifted = (packet->modifiers & (USB_LSHIFT | USB_RSHIFT)) != 0;
   uint8_t keycode;
+  long now;
 
+  /* Process newly pressed keys */
   for (i = 0; i < 6; i++) {
     keycode = packet->keycode[i];
     if (keycode == 0) {
       continue;
     }
     if (keycode_present(keycode, prev_packet)) {
-      continue;
+      continue; /* held key — repeat handled by timer */
     }
     if (handle_new_key(keycode, shifted)) {
       return 1;
     }
+    /* Start repeat tracking (exclude ESC, Enter, Caps Lock) */
+    if (keycode != 0x29 && keycode != 0x28 && keycode != 0x39) {
+      now = time_ms();
+      repeat_keycode = keycode;
+      repeat_shifted = shifted;
+      repeat_active = 1;
+      repeat_start_time = now;
+      repeat_last_time = now;
+    }
+  }
+
+  /* Check for released keys — stop repeat if the tracked key was released */
+  if (repeat_active && !keycode_present(repeat_keycode, packet)) {
+    repeat_active = 0;
   }
 
   return 0;
@@ -488,8 +540,23 @@ int main()
   for (;;) {
     rc = libusb_interrupt_transfer(keyboard, endpoint_address,
                                    (unsigned char *)&packet, sizeof(packet),
-                                   &transferred, 0);
+                                   &transferred, USB_TIMEOUT_MS);
     if (rc == LIBUSB_ERROR_INTERRUPTED) {
+      continue;
+    }
+    if (rc == LIBUSB_ERROR_TIMEOUT) {
+      /* No USB data — check software repeat timer */
+      if (repeat_active) {
+        long now = time_ms();
+        long elapsed = now - repeat_start_time;
+        if (elapsed >= REPEAT_DELAY_MS &&
+            (now - repeat_last_time) >= REPEAT_INTERVAL_MS) {
+          if (handle_new_key(repeat_keycode, repeat_shifted)) {
+            break;
+          }
+          repeat_last_time = now;
+        }
+      }
       continue;
     }
     if (rc != 0) {
