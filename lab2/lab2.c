@@ -1,42 +1,80 @@
 /*
+ * CSEE 4840 Lab 2 — Chat Client for DE1-SoC
  *
- * CSEE 4840 Lab 2 for 2019
+ * A two-way chat application that runs on the DE1-SoC board (ARM Cyclone V).
+ * It reads keystrokes from a USB keyboard via libusb, renders text on a VGA
+ * monitor through the Linux framebuffer (/dev/fb0), and communicates with a
+ * remote TCP chat server.
+ *
+ * The VGA display is divided into three regions:
+ *   - Rows 0–20:  Receive area (incoming messages + echoed sent messages)
+ *   - Row 21:     Divider (dashes with a cursor-position indicator)
+ *   - Rows 22–23: Input area (up to 128 characters, 2 rows x 64 columns)
+ *
+ * Two threads share the framebuffer, protected by a pthread mutex:
+ *   1. Main thread — polls the USB keyboard for HID packets
+ *   2. Network thread — blocks on TCP socket reads for incoming messages
  *
  * Name/UNI: Please Changeto Yourname (pcy2301)
  */
+/* Project headers: framebuffer font rendering and USB keyboard HID interface */
 #include "fbputchar.h"
 #include "usbkeyboard.h"
 
+/* Networking: inet_pton() for IP conversion, socket API for TCP communication */
 #include <arpa/inet.h>
-#include <errno.h>
+#include <sys/socket.h>
+
+/* Threading: separate thread for blocking network reads */
 #include <pthread.h>
+
+/* General utilities */
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
 
-/* Update SERVER_HOST to be the IP address of
- * the chat server you are connecting to
+/*
+ * Server connection settings.
+ * SERVER_HOST is the IP of the chat server (arthur.cs.columbia.edu).
+ * SERVER_PORT is the TCP port the server listens on.
  */
 /* arthur.cs.columbia.edu */
 #define SERVER_HOST "128.59.19.114"
 #define SERVER_PORT 42000
 
+/*
+ * Screen geometry constants.
+ * The VGA framebuffer is addressed in character cells via fbputchar().
+ * The display is organized as a 24-row x 64-column text grid:
+ *   - RECV_TOP_ROW..RECV_BOTTOM_ROW (rows 0–20): receive/display area
+ *   - DIVIDER_ROW (row 21): horizontal separator
+ *   - INPUT_TOP_ROW..SCREEN_ROWS-1 (rows 22–23): user input area
+ */
 #define BUFFER_SIZE 128
 #define SCREEN_ROWS 24
 #define SCREEN_COLS 64
 #define INPUT_ROWS 2
 
-#define INPUT_TOP_ROW (SCREEN_ROWS - INPUT_ROWS)
-#define DIVIDER_ROW (INPUT_TOP_ROW - 1)
-#define RECV_TOP_ROW 0
-#define RECV_BOTTOM_ROW (DIVIDER_ROW - 1)
-#define RECV_ROWS (RECV_BOTTOM_ROW - RECV_TOP_ROW + 1)
+#define INPUT_TOP_ROW (SCREEN_ROWS - INPUT_ROWS)  /* Row 22 */
+#define DIVIDER_ROW (INPUT_TOP_ROW - 1)            /* Row 21 */
+#define RECV_TOP_ROW 0                             /* Row 0  */
+#define RECV_BOTTOM_ROW (DIVIDER_ROW - 1)          /* Row 20 */
+#define RECV_ROWS (RECV_BOTTOM_ROW - RECV_TOP_ROW + 1) /* 21 rows */
 
+/* Maximum characters the user can type before sending (2 rows x 64 cols) */
 #define INPUT_MAX_CHARS (INPUT_ROWS * SCREEN_COLS)
 
+/*
+ * Software key-repeat timing.
+ * USB keyboards normally handle repeat in hardware, but the HID polling
+ * approach here means we need software repeat. After holding a key for
+ * REPEAT_DELAY_MS, it repeats every REPEAT_INTERVAL_MS.
+ * USB_TIMEOUT_MS is the libusb_interrupt_transfer timeout — short enough
+ * to keep the repeat timer responsive.
+ */
 #define REPEAT_DELAY_MS   500
 #define REPEAT_INTERVAL_MS 50
 #define USB_TIMEOUT_MS     50
@@ -50,24 +88,51 @@
  * 
  */
 
-int sockfd = -1; /* Socket file descriptor */
+/*
+ * Global state: networking and USB
+ */
+int sockfd = -1; /* TCP socket file descriptor for the chat server */
 
-struct libusb_device_handle *keyboard = NULL;
-uint8_t endpoint_address;
+struct libusb_device_handle *keyboard = NULL; /* USB keyboard handle */
+uint8_t endpoint_address;                     /* HID interrupt endpoint */
 
+/*
+ * Threading primitives.
+ * fb_lock protects all framebuffer writes — any function suffixed "_locked"
+ * must be called while holding this mutex.
+ */
 pthread_t network_thread;
 pthread_mutex_t fb_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/*
+ * Receive region state.
+ * recv_lines[][] is a logical buffer of text lines displayed in rows 0–20.
+ * recv_row/recv_col track the current write position. When recv_row reaches
+ * RECV_ROWS, all lines scroll up by one (oldest line is discarded).
+ */
 static char recv_lines[RECV_ROWS][SCREEN_COLS];
 static int recv_row = 0;
 static int recv_col = 0;
 
+/*
+ * Input buffer state.
+ * Supports mid-line editing: cursor_pos tracks the insertion point
+ * independently of input_len, allowing arrow keys + backspace to edit
+ * anywhere within the typed text.
+ */
 static char input_buf[INPUT_MAX_CHARS + 1];
 static size_t input_len = 0;
 static size_t cursor_pos = 0;
 
+/* Caps Lock toggle — affects only letter keys (a-z), not symbols */
 static int caps_lock_active = 0;
 
+/*
+ * Software key-repeat state machine.
+ * Tracks which key is held, when it was first pressed (repeat_start_time),
+ * and when the last repeat event fired (repeat_last_time). After
+ * REPEAT_DELAY_MS of holding, repeats fire every REPEAT_INTERVAL_MS.
+ */
 static uint8_t repeat_keycode = 0;
 static int     repeat_shifted = 0;
 static int     repeat_active = 0;
@@ -76,6 +141,7 @@ static long    repeat_last_time = 0;
 
 void *network_thread_f(void *);
 
+/* Returns current wall-clock time in milliseconds. Used for key-repeat timing. */
 static long time_ms(void)
 {
   struct timeval tv;
@@ -83,6 +149,13 @@ static long time_ms(void)
   return (long)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
 }
 
+/*
+ * ---- Screen Drawing Helpers ----
+ * All functions suffixed "_locked" assume the caller already holds fb_lock.
+ * They write directly to the framebuffer via fbputchar().
+ */
+
+/* Overwrite an entire screen row with spaces (blanks it out) */
 static void clear_row_locked(int row)
 {
   int col;
@@ -92,6 +165,7 @@ static void clear_row_locked(int row)
   }
 }
 
+/* Clear all 24 rows of the VGA text display */
 static void clear_screen_locked(void)
 {
   int row;
@@ -101,6 +175,7 @@ static void clear_screen_locked(void)
   }
 }
 
+/* Draw the horizontal divider line (row 21) with dashes */
 static void draw_divider_locked(void)
 {
   int col;
@@ -110,6 +185,11 @@ static void draw_divider_locked(void)
   }
 }
 
+/*
+ * Render one logical line from recv_lines[] onto the corresponding screen row.
+ * logical_row 0 maps to screen row RECV_TOP_ROW (0), logical_row N maps to
+ * screen row N.
+ */
 static void render_receive_row_locked(int logical_row)
 {
   int col;
@@ -119,12 +199,14 @@ static void render_receive_row_locked(int logical_row)
   }
 }
 
+/* Clear a logical receive line (fill with spaces) and redraw it on screen */
 static void clear_receive_row_locked(int logical_row)
 {
   memset(recv_lines[logical_row], ' ', SCREEN_COLS);
   render_receive_row_locked(logical_row);
 }
 
+/* Redraw the entire receive region (rows 0–20) from the recv_lines buffer */
 static void redraw_receive_region_locked(void)
 {
   int row;
@@ -134,6 +216,13 @@ static void redraw_receive_region_locked(void)
   }
 }
 
+/*
+ * Scroll the receive region up by one line.
+ * Shift every line up via memcpy (line 1 -> line 0, line 2 -> line 1, etc.),
+ * blank the bottom line, and redraw the entire region.
+ * Per lab spec: "When printing reaches the bottom of the area, scroll the
+ * entry region so there is always a blank line at the bottom."
+ */
 static void scroll_receive_locked(void)
 {
   int row;
@@ -145,6 +234,10 @@ static void scroll_receive_locked(void)
   redraw_receive_region_locked();
 }
 
+/*
+ * Move to the next line in the receive region.
+ * If we've reached the bottom, scroll everything up first.
+ */
 static void advance_receive_line_locked(void)
 {
   recv_col = 0;
@@ -156,6 +249,16 @@ static void advance_receive_line_locked(void)
   clear_receive_row_locked(recv_row);
 }
 
+/*
+ * Append text to the receive region, character by character.
+ * Handles special cases:
+ *   - '\r' is silently skipped (server may send \r\n line endings)
+ *   - '\n' advances to the next line
+ *   - Non-printable chars (outside 32–126) are replaced with '?'
+ *   - Auto-wraps at SCREEN_COLS (no word-wrap, just hard wrap)
+ *
+ * Used for both incoming server messages and echoing the user's own sent text.
+ */
 static void append_receive_text_locked(const char *text, size_t len)
 {
   size_t i;
@@ -178,7 +281,7 @@ static void append_receive_text_locked(const char *text, size_t len)
     }
 
     if (recv_col >= SCREEN_COLS) {
-      advance_receive_line_locked();
+      advance_receive_line_locked(); /* Wrap: column exceeded row width */
     }
 
     recv_lines[recv_row][recv_col] = c;
@@ -186,11 +289,16 @@ static void append_receive_text_locked(const char *text, size_t len)
     recv_col++;
 
     if (recv_col >= SCREEN_COLS) {
-      advance_receive_line_locked();
+      advance_receive_line_locked(); /* Wrap: column exceeded row width */
     }
   }
 }
 
+/*
+ * ---- Input Area Rendering ----
+ */
+
+/* Clear the input rows (rows 22–23) on the framebuffer */
 static void clear_input_rows_locked(void)
 {
   int row;
@@ -200,6 +308,13 @@ static void clear_input_rows_locked(void)
   }
 }
 
+/*
+ * Draw the cursor as an underscore ('_') at the current cursor_pos.
+ * Also redraws the divider to keep it clean.
+ * The cursor position maps into the 2-row input area:
+ *   row = INPUT_TOP_ROW + (cursor_pos / SCREEN_COLS)
+ *   col = cursor_pos % SCREEN_COLS
+ */
 static void draw_cursor_locked(void)
 {
   size_t visible_pos = cursor_pos;
@@ -219,6 +334,10 @@ static void draw_cursor_locked(void)
   }
 }
 
+/*
+ * Render the full input area: clear it, draw each character from input_buf,
+ * then draw the cursor. Characters wrap from row 22 to row 23 at column 64.
+ */
 static void render_input_locked(void)
 {
   size_t i;
@@ -234,6 +353,11 @@ static void render_input_locked(void)
   draw_cursor_locked();
 }
 
+/*
+ * Initialize the entire UI to a clean state.
+ * Zeros out the receive buffer, resets input state, clears the screen,
+ * draws the divider, and renders the empty input area with cursor.
+ */
 static void initialize_ui(void)
 {
   memset(recv_lines, ' ', sizeof(recv_lines));
@@ -252,6 +376,11 @@ static void initialize_ui(void)
   pthread_mutex_unlock(&fb_lock);
 }
 
+/*
+ * Check whether a given keycode appears in the 6-keycode slots of an HID
+ * keyboard packet. Used to diff the current packet against the previous
+ * one to detect newly pressed vs. held keys.
+ */
 static int keycode_present(uint8_t keycode, const struct usb_keyboard_packet *packet)
 {
   int i;
@@ -264,6 +393,14 @@ static int keycode_present(uint8_t keycode, const struct usb_keyboard_packet *pa
   return 0;
 }
 
+/*
+ * Convert a USB HID keycode to an ASCII character.
+ * USB keycodes are NOT ASCII — they follow the USB HID Usage Tables (page 53).
+ * Keycodes 0x04–0x1d map to a-z (with shift -> A-Z).
+ * Keycodes 0x1e–0x27 map to 1-0 (with shift -> !@#$%^&*()).
+ * Keycodes 0x2c–0x38 map to punctuation and symbols.
+ * Returns 0 for unrecognized keycodes (e.g., function keys, modifiers).
+ */
 static char keycode_to_ascii(uint8_t keycode, int shifted)
 {
   if (keycode >= 0x04 && keycode <= 0x1d) { /* a-z */
@@ -297,6 +434,10 @@ static char keycode_to_ascii(uint8_t keycode, int shifted)
   }
 }
 
+/*
+ * Reliable write: loop until all bytes are sent, handling partial writes
+ * and EINTR (interrupted system calls). Returns 0 on success, -1 on error.
+ */
 static int send_all(int fd, const char *buf, size_t len)
 {
   size_t sent = 0;
@@ -319,6 +460,11 @@ static int send_all(int fd, const char *buf, size_t len)
   return 0;
 }
 
+/*
+ * Insert a character at cursor_pos within the input buffer.
+ * Uses memmove to shift existing characters right, supporting mid-line editing.
+ * Returns 1 if inserted, 0 if the buffer is full (INPUT_MAX_CHARS reached).
+ */
 static int insert_char(char c)
 {
   if (input_len >= INPUT_MAX_CHARS) {
@@ -333,6 +479,11 @@ static int insert_char(char c)
   return 1;
 }
 
+/*
+ * Delete the character to the left of cursor_pos (backspace behavior).
+ * Uses memmove to shift remaining characters left. Returns 1 if deleted,
+ * 0 if cursor is already at position 0.
+ */
 static int backspace_char(void)
 {
   if (cursor_pos == 0) {
@@ -346,6 +497,7 @@ static int backspace_char(void)
   return 1;
 }
 
+/* Move cursor one position left (left arrow key). Returns 0 at boundary. */
 static int move_cursor_left(void)
 {
   if (cursor_pos == 0) {
@@ -355,6 +507,7 @@ static int move_cursor_left(void)
   return 1;
 }
 
+/* Move cursor one position right (right arrow key). Returns 0 past input_len. */
 static int move_cursor_right(void)
 {
   if (cursor_pos >= input_len) {
@@ -364,6 +517,13 @@ static int move_cursor_right(void)
   return 1;
 }
 
+/*
+ * Send the current input buffer to the chat server and echo it locally.
+ * Per lab spec: "When the user presses return, send the text to the server
+ * and also display it in the receive area."
+ * Appends '\n' before sending. After sending, resets the input buffer and
+ * clears the key-repeat state.
+ */
 static void send_current_input(void)
 {
   char outbound[INPUT_MAX_CHARS + 2];
@@ -393,6 +553,21 @@ static void send_current_input(void)
   pthread_mutex_unlock(&fb_lock);
 }
 
+/*
+ * Central key dispatch — called for each newly pressed key and for repeats.
+ *
+ * Special keys:
+ *   0x29 (ESC)       — returns 1 to signal program exit
+ *   0x28 (Enter)     — sends current input to server
+ *   0x39 (Caps Lock) — toggles caps_lock_active
+ *   0x2a (Backspace) — deletes character left of cursor
+ *   0x4f (Right)     — moves cursor right
+ *   0x50 (Left)      — moves cursor left
+ *
+ * For letter keys (0x04–0x1d), Caps Lock XORs with Shift to determine case.
+ * For all other printable keys, only Shift affects the output.
+ * Returns 1 if the program should exit, 0 otherwise.
+ */
 static int handle_new_key(uint8_t keycode, int shifted)
 {
   char c;
@@ -429,7 +604,7 @@ static int handle_new_key(uint8_t keycode, int shifted)
     }
     return 0;
   default:
-    /* For letter keys, Caps Lock toggles uppercase */
+    /* For letter keys, Caps Lock toggles uppercase (XOR with Shift) */
     if (keycode >= 0x04 && keycode <= 0x1d) {
       effective_shifted = shifted || caps_lock_active;
     } else {
@@ -445,6 +620,19 @@ static int handle_new_key(uint8_t keycode, int shifted)
   }
 }
 
+/*
+ * Process an 8-byte USB HID keyboard packet.
+ *
+ * Packet format (struct usb_keyboard_packet):
+ *   byte 0: modifier bitmask (Shift, Ctrl, Alt, GUI for L/R)
+ *   byte 1: reserved (always 0)
+ *   bytes 2–7: up to 6 simultaneous keycodes (0 = no key)
+ *
+ * Diffs against prev_packet to find newly pressed keys (present now but not
+ * before). Held keys are handled separately by the software repeat timer.
+ * Also starts/stops key-repeat tracking for the most recently pressed key.
+ * Returns 1 if ESC was pressed (signals exit), 0 otherwise.
+ */
 static int process_keyboard_packet(const struct usb_keyboard_packet *packet,
                                    const struct usb_keyboard_packet *prev_packet)
 {
@@ -453,7 +641,7 @@ static int process_keyboard_packet(const struct usb_keyboard_packet *packet,
   uint8_t keycode;
   long now;
 
-  /* Process newly pressed keys */
+  /* Process newly pressed keys (in current packet but not in previous) */
   for (i = 0; i < 6; i++) {
     keycode = packet->keycode[i];
     if (keycode == 0) {
@@ -476,7 +664,7 @@ static int process_keyboard_packet(const struct usb_keyboard_packet *packet,
     }
   }
 
-  /* Check for released keys — stop repeat if the tracked key was released */
+  /* If the key being tracked for repeat was released, stop repeating */
   if (repeat_active && !keycode_present(repeat_keycode, packet)) {
     repeat_active = 0;
   }
@@ -484,6 +672,26 @@ static int process_keyboard_packet(const struct usb_keyboard_packet *packet,
   return 0;
 }
 
+/*
+ * ---- Main Entry Point ----
+ *
+ * Initialization sequence:
+ *   1. Open the Linux framebuffer (/dev/fb0) for VGA text rendering
+ *   2. Open the USB keyboard via libusb (detach kernel driver, claim HID interface)
+ *   3. Create a TCP socket and connect to the chat server
+ *   4. Initialize the UI (clear screen, draw divider, show cursor)
+ *   5. Spawn the network thread for receiving incoming messages
+ *
+ * Then enters the main keyboard polling loop:
+ *   - Calls libusb_interrupt_transfer() with a short timeout (USB_TIMEOUT_MS)
+ *   - On timeout: checks the software key-repeat timer
+ *   - On data: processes the HID packet to detect new keypresses
+ *
+ * Clean shutdown (triggered by ESC):
+ *   - shutdown() the socket (causes network thread's read() to return)
+ *   - Join the network thread
+ *   - Close the socket and libusb resources
+ */
 int main()
 {
   int err;
@@ -493,27 +701,29 @@ int main()
   struct usb_keyboard_packet packet;
   struct usb_keyboard_packet prev_packet;
 
+  /* Initialize previous packet to all zeros (no keys pressed) */
   memset(&packet, 0, sizeof(packet));
   memset(&prev_packet, 0, sizeof(prev_packet));
 
+  /* Step 1: Open the framebuffer for VGA rendering */
   if ((err = fbopen()) != 0) {
     fprintf(stderr, "Error: Could not open framebuffer: %d\n", err);
     exit(1);
   }
 
-  /* Open the keyboard */
+  /* Step 2: Open the USB keyboard (enumerate, detach kernel driver, claim) */
   if ((keyboard = openkeyboard(&endpoint_address)) == NULL) {
     fprintf(stderr, "Did not find a keyboard\n");
     exit(1);
   }
 
-  /* Create a TCP communications socket */
+  /* Step 3: Create a TCP socket and connect to the chat server */
   if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
     fprintf(stderr, "Error: Could not create socket\n");
     exit(1);
   }
 
-  /* Get the server address */
+  /* Convert server IP string to binary and set port (network byte order) */
   memset(&serv_addr, 0, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_port = htons(SERVER_PORT);
@@ -522,21 +732,27 @@ int main()
     exit(1);
   }
 
-  /* Connect the socket to the server */
+  /* Connect to the chat server */
   if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
     fprintf(stderr, "Error: connect() failed.  Is the server running?\n");
     exit(1);
   }
 
+  /* Step 4: Initialize the UI (clear screen, draw divider, show cursor) */
   initialize_ui();
 
-  /* Start the network thread */
+  /* Step 5: Start the network thread for receiving incoming messages */
   if (pthread_create(&network_thread, NULL, network_thread_f, NULL) != 0) {
     fprintf(stderr, "Error: could not create network thread\n");
     exit(1);
   }
 
-  /* Look for and handle keypresses */
+  /*
+   * Main keyboard polling loop.
+   * libusb_interrupt_transfer() blocks for up to USB_TIMEOUT_MS (50ms).
+   * On timeout, we check the software key-repeat timer.
+   * On successful transfer, we process the HID packet.
+   */
   for (;;) {
     rc = libusb_interrupt_transfer(keyboard, endpoint_address,
                                    (unsigned char *)&packet, sizeof(packet),
@@ -545,7 +761,11 @@ int main()
       continue;
     }
     if (rc == LIBUSB_ERROR_TIMEOUT) {
-      /* No USB data — check software repeat timer */
+      /*
+       * No USB data within timeout — check software key-repeat.
+       * If a key has been held for >= REPEAT_DELAY_MS, fire repeats
+       * every REPEAT_INTERVAL_MS until the key is released.
+       */
       if (repeat_active) {
         long now = time_ms();
         long elapsed = now - repeat_start_time;
@@ -572,6 +792,10 @@ int main()
     prev_packet = packet;
   }
 
+  /*
+   * Clean shutdown: close the socket (unblocks network thread's read()),
+   * wait for the network thread to exit, then release resources.
+   */
   shutdown(sockfd, SHUT_RDWR);
   pthread_join(network_thread, NULL);
   close(sockfd);
@@ -584,6 +808,17 @@ int main()
   return 0;
 }
 
+/*
+ * Network thread function.
+ * Runs in a separate thread, blocking on read() from the TCP socket.
+ * A dedicated thread is needed because both socket read and USB keyboard
+ * read are blocking operations that cannot share a single thread.
+ *
+ * Incoming data is appended to the receive region under fb_lock.
+ * The loop exits when the server closes the connection (read returns 0)
+ * or on a non-EINTR error. shutdown() from main() causes read() to
+ * return 0, allowing clean thread termination.
+ */
 void *network_thread_f(void *ignored)
 {
   (void)ignored;
