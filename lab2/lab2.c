@@ -636,6 +636,7 @@ static int process_keyboard_packet(const struct usb_keyboard_packet *packet,
 {
   int i;
   int shifted = (packet->modifiers & (USB_LSHIFT | USB_RSHIFT)) != 0;
+  repeat_shifted = shifted;
   uint8_t keycode;
   long now;
 
