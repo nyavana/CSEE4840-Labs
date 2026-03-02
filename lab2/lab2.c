@@ -543,8 +543,6 @@ static void send_current_input(void)
   }
 
   pthread_mutex_lock(&fb_lock);
-  append_receive_text_locked(input_buf, input_len);
-  append_receive_text_locked("\n", 1);
   input_len = 0;
   cursor_pos = 0;
   input_buf[0] = '\0';
