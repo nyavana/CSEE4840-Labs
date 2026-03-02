@@ -1,2 +1,0 @@
-Warning (10268): Verilog HDL information at collatz.sv(9): always construct contains both blocking and non-blocking assignments File: /homes/user/stud/spring26/cy2822/csee4840/lab1/collatz.sv Line: 9
-Warning (10268): Verilog HDL information at range.sv(51): always construct contains both blocking and non-blocking assignments File: /homes/user/stud/spring26/cy2822/csee4840/lab1/range.sv Line: 51

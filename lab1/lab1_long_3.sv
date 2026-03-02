@@ -29,51 +29,28 @@ module lab1( input logic        CLOCK_50,  // 50 MHz Clock input
       key_s2 <= key_s1;
    end
 
-<<<<<<< Updated upstream
-   // ---- Cooldown-based edge filter (10ms) ----
-   // Accept first transition IMMEDIATELY, then lock out 10 ms.
-   localparam [18:0] COOLDOWN = 19'd499_999;    // 10 ms at 50 MHz
+   // ---- Cooldown-based edge filter (80ms) ----
+   // Accept first transition IMMEDIATELY, then lock out 80 ms.
+   // Unlike stability-debounce, this never misses short taps.
+   localparam [22:0] COOLDOWN = 23'd3_999_999;  // 80 ms at 50 MHz
    logic [3:0]  key_clean = 4'b1111;            // filtered state (init: released)
-   logic [18:0] cd0 = 19'd0, cd1 = 19'd0, cd2 = 19'd0, cd3 = 19'd0;
+   logic [22:0] cd0 = 23'd0, cd1 = 23'd0, cd2 = 23'd0, cd3 = 23'd0;
 
    always_ff @(posedge clk) begin
       // KEY[0]
-      if (cd0 > 19'd0)                              cd0 <= cd0 - 19'd1;
+      if (cd0 > 23'd0)                              cd0 <= cd0 - 23'd1;
       else if (key_s2[0] != key_clean[0]) begin      cd0 <= COOLDOWN;
                                                      key_clean[0] <= key_s2[0]; end
       // KEY[1]
-      if (cd1 > 19'd0)                              cd1 <= cd1 - 19'd1;
+      if (cd1 > 23'd0)                              cd1 <= cd1 - 23'd1;
       else if (key_s2[1] != key_clean[1]) begin      cd1 <= COOLDOWN;
                                                      key_clean[1] <= key_s2[1]; end
       // KEY[2]
-      if (cd2 > 19'd0)                              cd2 <= cd2 - 19'd1;
+      if (cd2 > 23'd0)                              cd2 <= cd2 - 23'd1;
       else if (key_s2[2] != key_clean[2]) begin      cd2 <= COOLDOWN;
                                                      key_clean[2] <= key_s2[2]; end
       // KEY[3]
-      if (cd3 > 19'd0)                              cd3 <= cd3 - 19'd1;
-=======
-   // ---- Cooldown-based edge filter (20ms) ----
-   // Accept first transition IMMEDIATELY, then lock out 20 ms.
-   localparam [19:0] COOLDOWN = 20'd999_999;    // 20 ms at 50 MHz
-   logic [3:0]  key_clean = 4'b1111;            // filtered state (init: released)
-   logic [19:0] cd0 = 20'd0, cd1 = 20'd0, cd2 = 20'd0, cd3 = 20'd0;
-
-   always_ff @(posedge clk) begin
-      // KEY[0]
-      if (cd0 > 20'd0)                              cd0 <= cd0 - 20'd1;
-      else if (key_s2[0] != key_clean[0]) begin      cd0 <= COOLDOWN;
-                                                     key_clean[0] <= key_s2[0]; end
-      // KEY[1]
-      if (cd1 > 20'd0)                              cd1 <= cd1 - 20'd1;
-      else if (key_s2[1] != key_clean[1]) begin      cd1 <= COOLDOWN;
-                                                     key_clean[1] <= key_s2[1]; end
-      // KEY[2]
-      if (cd2 > 20'd0)                              cd2 <= cd2 - 20'd1;
-      else if (key_s2[2] != key_clean[2]) begin      cd2 <= COOLDOWN;
-                                                     key_clean[2] <= key_s2[2]; end
-      // KEY[3]
-      if (cd3 > 20'd0)                              cd3 <= cd3 - 20'd1;
->>>>>>> Stashed changes
+      if (cd3 > 23'd0)                              cd3 <= cd3 - 23'd1;
       else if (key_s2[3] != key_clean[3]) begin      cd3 <= COOLDOWN;
                                                      key_clean[3] <= key_s2[3]; end
    end
@@ -137,50 +114,10 @@ module lab1( input logic        CLOCK_50,  // 50 MHz Clock input
    assign rep_tick = ( initial_wait && rep_cnt == 25'd24_999_999) |
                      (!initial_wait && rep_cnt == 25'd9_999_999);
 
-   // ---- Grace period: detect simultaneous KEY[0]+KEY[1] presses (50 ms) ----
-   // Collects falling edges over a 50 ms window. If both keys fell within
-   // the window, neither inc nor dec fires (simultaneous press = no change).
-   localparam [21:0] GRACE_PERIOD = 22'd2_499_999;  // 50 ms at 50 MHz
-   logic [21:0] grace_tmr    = 22'd0;
-   logic        grace_active = 1'b0;
-   logic        fell0_latch  = 1'b0;
-   logic        fell1_latch  = 1'b0;
-   logic        inc_pulse    = 1'b0;
-   logic        dec_pulse    = 1'b0;
-
-   always_ff @(posedge clk) begin
-      inc_pulse <= 1'b0;
-      dec_pulse <= 1'b0;
-      if (grace_active) begin
-         fell0_latch <= fell0_latch | key_fell[0];
-         fell1_latch <= fell1_latch | key_fell[1];
-         if (grace_tmr == 20'd0) begin
-            grace_active <= 1'b0;
-            if (fell0_latch & ~fell1_latch)
-               inc_pulse <= 1'b1;
-            else if (fell1_latch & ~fell0_latch)
-               dec_pulse <= 1'b1;
-            // both fell → suppress both (no change)
-         end else
-            grace_tmr <= grace_tmr - 20'd1;
-      end else if (key_fell[0] | key_fell[1]) begin
-         grace_active <= 1'b1;
-         grace_tmr    <= GRACE_PERIOD;
-         fell0_latch  <= key_fell[0];
-         fell1_latch  <= key_fell[1];
-      end
-   end
-
-   // ---- Increment / decrement actions ----
-   // Auto-repeat only when exactly one key is held (gate with other key released)
+   // ---- Increment / decrement actions (KEY[0] has priority) ----
    logic inc, dec;
-<<<<<<< Updated upstream
    assign inc = key_fell[0] | (~key_clean[0] & rep_tick);
    assign dec = (key_fell[1] | (~key_clean[1] & rep_tick)) & ~inc;
-=======
-   assign inc = inc_pulse | (~key_clean[0] & key_clean[1] & rep_tick);
-   assign dec = dec_pulse | (~key_clean[1] & key_clean[0] & rep_tick);
->>>>>>> Stashed changes
 
    // ---- Base and offset management ----
    always_ff @(posedge clk) begin
