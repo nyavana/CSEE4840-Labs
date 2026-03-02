@@ -175,14 +175,33 @@ static void clear_screen_locked(void)
   }
 }
 
-/* Draw the horizontal divider line (row 21) with dashes */
+/*
+ * Return a cursor position safe for rendering.
+ * cursor_pos can never exceed INPUT_MAX_CHARS in normal operation, but clamp
+ * defensively so drawing code always stays inside the 2-row input region.
+ */
+static size_t visible_cursor_pos(void)
+{
+  size_t visible_pos = cursor_pos;
+
+  if (visible_pos >= INPUT_MAX_CHARS) {
+    visible_pos = INPUT_MAX_CHARS - 1;
+  }
+
+  return visible_pos;
+}
+
+/* Draw the horizontal divider line (row 21) with dashes and one cursor marker */
 static void draw_divider_locked(void)
 {
   int col;
+  int indicator_col = (int)(visible_cursor_pos() % SCREEN_COLS);
 
   for (col = 0; col < SCREEN_COLS; col++) {
     fbputchar('-', DIVIDER_ROW, col);
   }
+
+  fbputchar('_', DIVIDER_ROW, indicator_col);
 }
 
 /*
@@ -309,27 +328,20 @@ static void clear_input_rows_locked(void)
 }
 
 /*
- * Draw the cursor as an underscore ('_') at the current cursor_pos.
- * Also redraws the divider to keep it clean.
+ * Draw the input-area cursor as an underscore ('_') at the current cursor_pos.
  * The cursor position maps into the 2-row input area:
  *   row = INPUT_TOP_ROW + (cursor_pos / SCREEN_COLS)
  *   col = cursor_pos % SCREEN_COLS
  */
 static void draw_cursor_locked(void)
 {
-  size_t visible_pos = cursor_pos;
+  size_t visible_pos = visible_cursor_pos();
   int cursor_row, cursor_col;
-
-  if (visible_pos >= INPUT_MAX_CHARS) {
-    visible_pos = INPUT_MAX_CHARS - 1;
-  }
 
   cursor_row = INPUT_TOP_ROW + (int)(visible_pos / SCREEN_COLS);
   cursor_col = (int)(visible_pos % SCREEN_COLS);
 
-  draw_divider_locked();
-
-  if (cursor_row < SCREEN_ROWS) {
+  if (cursor_row >= INPUT_TOP_ROW && cursor_row < SCREEN_ROWS) {
     fbputchar('_', cursor_row, cursor_col);
   }
 }
@@ -350,6 +362,7 @@ static void render_input_locked(void)
     col = (int)(i % SCREEN_COLS);
     fbputchar(input_buf[i], row, col);
   }
+  draw_divider_locked();
   draw_cursor_locked();
 }
 
