@@ -330,7 +330,7 @@ static void draw_cursor_locked(void)
   draw_divider_locked();
 
   if (cursor_row < SCREEN_ROWS) {
-    fbputchar('_', cursor_row, cursor_col);
+
   }
 }
 
