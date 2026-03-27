@@ -31,32 +31,32 @@
 //                     web: http://www.terasic.com/  
 //                     email: support@terasic.com
 module soc_system_top(
-		      
+                      
  ///////// ADC /////////
- inout 	       ADC_CS_N,
+ inout         ADC_CS_N,
  output        ADC_DIN,
- input 	       ADC_DOUT,
+ input         ADC_DOUT,
  output        ADC_SCLK,
 
  ///////// AUD /////////
- input 	       AUD_ADCDAT,
- inout 	       AUD_ADCLRCK,
- inout 	       AUD_BCLK,
+ input         AUD_ADCDAT,
+ inout         AUD_ADCLRCK,
+ inout         AUD_BCLK,
  output        AUD_DACDAT,
- inout 	       AUD_DACLRCK,
+ inout         AUD_DACLRCK,
  output        AUD_XCK,
 
  ///////// CLOCK2 /////////
- input 	       CLOCK2_50,
+ input         CLOCK2_50,
 
  ///////// CLOCK3 /////////
- input 	       CLOCK3_50,
+ input         CLOCK3_50,
 
  ///////// CLOCK4 /////////
- input 	       CLOCK4_50,
+ input         CLOCK4_50,
 
  ///////// CLOCK /////////
- input 	       CLOCK_50,
+ input         CLOCK_50,
 
  ///////// DRAM /////////
  output [12:0] DRAM_ADDR,
@@ -76,7 +76,7 @@ module soc_system_top(
 
  ///////// FPGA /////////
  output        FPGA_I2C_SCLK,
- inout 	       FPGA_I2C_SDAT,
+ inout         FPGA_I2C_SDAT,
 
  ///////// GPIO /////////
  inout [35:0]  GPIO_0,
@@ -101,7 +101,7 @@ module soc_system_top(
  output [6:0]  HEX5,
 
  ///////// HPS /////////
- inout 	       HPS_CONV_USB_N,
+ inout         HPS_CONV_USB_N,
  output [14:0] HPS_DDR3_ADDR,
  output [2:0]  HPS_DDR3_BA,
  output        HPS_DDR3_CAS_N,
@@ -116,43 +116,43 @@ module soc_system_top(
  output        HPS_DDR3_ODT,
  output        HPS_DDR3_RAS_N,
  output        HPS_DDR3_RESET_N,
- input 	       HPS_DDR3_RZQ,
+ input         HPS_DDR3_RZQ,
  output        HPS_DDR3_WE_N,
  output        HPS_ENET_GTX_CLK,
- inout 	       HPS_ENET_INT_N,
+ inout         HPS_ENET_INT_N,
  output        HPS_ENET_MDC,
- inout 	       HPS_ENET_MDIO,
- input 	       HPS_ENET_RX_CLK,
+ inout         HPS_ENET_MDIO,
+ input         HPS_ENET_RX_CLK,
  input [3:0]   HPS_ENET_RX_DATA,
- input 	       HPS_ENET_RX_DV,
+ input         HPS_ENET_RX_DV,
  output [3:0]  HPS_ENET_TX_DATA,
  output        HPS_ENET_TX_EN,
- inout 	       HPS_GSENSOR_INT,
- inout 	       HPS_I2C1_SCLK,
- inout 	       HPS_I2C1_SDAT,
- inout 	       HPS_I2C2_SCLK,
- inout 	       HPS_I2C2_SDAT,
- inout 	       HPS_I2C_CONTROL,
- inout 	       HPS_KEY,
- inout 	       HPS_LED,
- inout 	       HPS_LTC_GPIO,
+ inout         HPS_GSENSOR_INT,
+ inout         HPS_I2C1_SCLK,
+ inout         HPS_I2C1_SDAT,
+ inout         HPS_I2C2_SCLK,
+ inout         HPS_I2C2_SDAT,
+ inout         HPS_I2C_CONTROL,
+ inout         HPS_KEY,
+ inout         HPS_LED,
+ inout         HPS_LTC_GPIO,
  output        HPS_SD_CLK,
- inout 	       HPS_SD_CMD,
+ inout         HPS_SD_CMD,
  inout [3:0]   HPS_SD_DATA,
  output        HPS_SPIM_CLK,
- input 	       HPS_SPIM_MISO,
+ input         HPS_SPIM_MISO,
  output        HPS_SPIM_MOSI,
- inout 	       HPS_SPIM_SS,
- input 	       HPS_UART_RX,
+ inout         HPS_SPIM_SS,
+ input         HPS_UART_RX,
  output        HPS_UART_TX,
- input 	       HPS_USB_CLKOUT,
+ input         HPS_USB_CLKOUT,
  inout [7:0]   HPS_USB_DATA,
- input 	       HPS_USB_DIR,
- input 	       HPS_USB_NXT,
+ input         HPS_USB_DIR,
+ input         HPS_USB_NXT,
  output        HPS_USB_STP,
 
  ///////// IRDA /////////
- input 	       IRDA_RXD,
+ input         IRDA_RXD,
  output        IRDA_TXD,
 
  ///////// KEY /////////
@@ -162,20 +162,20 @@ module soc_system_top(
  output [9:0]  LEDR,
 
  ///////// PS2 /////////
- inout 	       PS2_CLK,
- inout 	       PS2_CLK2,
- inout 	       PS2_DAT,
- inout 	       PS2_DAT2,
+ inout         PS2_CLK,
+ inout         PS2_CLK2,
+ inout         PS2_DAT,
+ inout         PS2_DAT2,
 
  ///////// SW /////////
  input [9:0]   SW,
 
  ///////// TD /////////
- input 	       TD_CLK27,
+ input         TD_CLK27,
  input [7:0]   TD_DATA,
- input 	       TD_HS,
+ input         TD_HS,
  output        TD_RESET_N,
- input 	       TD_VS,
+ input         TD_VS,
 
 
  ///////// VGA /////////
@@ -192,7 +192,7 @@ module soc_system_top(
    soc_system soc_system0(
      .clk_clk                      ( CLOCK_50 ),
      .reset_reset_n                ( 1'b1 ),
-			  
+                          
      .hps_ddr3_mem_a               ( HPS_DDR3_ADDR ),
      .hps_ddr3_mem_ba              ( HPS_DDR3_BA ),
      .hps_ddr3_mem_ck              ( HPS_DDR3_CK_P ),
@@ -266,7 +266,16 @@ module soc_system_top(
      .hps_hps_io_gpio_inst_GPIO48  ( HPS_I2C_CONTROL ),
      .hps_hps_io_gpio_inst_GPIO53  ( HPS_LED ),
      .hps_hps_io_gpio_inst_GPIO54  ( HPS_KEY ),
-     .hps_hps_io_gpio_inst_GPIO61  ( HPS_GSENSOR_INT )
+     .hps_hps_io_gpio_inst_GPIO61  ( HPS_GSENSOR_INT ),
+
+     .vga_r        ( VGA_R ),
+     .vga_g        ( VGA_G ),
+     .vga_b        ( VGA_B ),
+     .vga_clk      ( VGA_CLK ),
+     .vga_hs       ( VGA_HS ),
+     .vga_vs       ( VGA_VS ),
+     .vga_blank_n  ( VGA_BLANK_N ),
+     .vga_sync_n   ( VGA_SYNC_N )
   );
 
    // The following quiet the "no driver" warnings for output
@@ -286,7 +295,7 @@ module soc_system_top(
    assign DRAM_BA = { 2{ SW[0] } };
    assign DRAM_DQ = SW[1] ? { 16{ SW[0] } } : { 16{ 1'bZ } };
    assign {DRAM_CAS_N, DRAM_CKE, DRAM_CLK, DRAM_CS_N,
-	   DRAM_LDQM, DRAM_RAS_N, DRAM_UDQM, DRAM_WE_N} = { 8{SW[0]} };
+           DRAM_LDQM, DRAM_RAS_N, DRAM_UDQM, DRAM_WE_N} = { 8{SW[0]} };
 
    assign FAN_CTRL = SW[0];
 
@@ -314,9 +323,5 @@ module soc_system_top(
 
    assign TD_RESET_N = SW[0];
 
-   assign {VGA_R, VGA_G, VGA_B} = { 24{ SW[0] } };
-   assign {VGA_BLANK_N, VGA_CLK,
-	   VGA_HS, VGA_SYNC_N, VGA_VS} = { 5{ SW[0] } };
 
-							          
 endmodule

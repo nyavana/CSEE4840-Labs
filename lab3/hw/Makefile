@@ -28,8 +28,11 @@ PRELOADER_MKPIMAGE = $(BSP_DIR)/preloader-mkpimage.bin
 
 UBOOT_IMAGE = $(BSP_DIR)/uboot-socfpga/u-boot.img
 
-KERNEL_REPO = https://github.com/altera-opensource/linux-socfpga.git
-KERNEL_BRANCH = socfpga-4.19
+# We had used Git branch "socfpga-4.19", but that disappeared
+# Tag v4.19 seems to be the final version of the 4.19 kernel
+
+KERNEL_REPO = https://github.com/altera-fpga/linux-socfpga.git
+KERNEL_TAG = v4.19
 DEFAULT_CONFIG = socfpga_defconfig
 CROSS = env CROSS_COMPILE=arm-altera-eabi- ARCH=arm
 
@@ -158,7 +161,7 @@ $(UBOOT_IMAGE) : $(PRELOADER_MAKEFILE) $(BSP_SETTINGS)
 
 # kernel-download
 #
-# Clone the Linux kernel repository
+#   Clone the Linux kernel repository
 #
 # kernel-config
 #
@@ -182,7 +185,8 @@ zimage : $(ZIMAGE)
 
 $(KERNEL_DIR) :
 	mkdir -p $(KERNEL_DIR)
-	git clone --branch $(KERNEL_BRANCH) $(KERNEL_REPO) $(KERNEL_DIR)
+	git clone --branch $(KERNEL_TAG) --single-branch --depth 1 \
+		$(KERNEL_REPO) $(KERNEL_DIR)
 
 # Configure the kernel.  Start from a provided default,
 # 
