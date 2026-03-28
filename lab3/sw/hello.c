@@ -15,19 +15,11 @@
 #include <string.h>
 #include <unistd.h>
 
-int vga_ball_fd;
+#define SCREEN_WIDTH  640
+#define SCREEN_HEIGHT 480
+#define BALL_RADIUS   20
 
-/* Read and print the background color */
-void print_background_color() {
-  vga_ball_arg_t vla;
-  
-  if (ioctl(vga_ball_fd, VGA_BALL_READ_BACKGROUND, &vla)) {
-      perror("ioctl(VGA_BALL_READ_BACKGROUND) failed");
-      return;
-  }
-  printf("%02x %02x %02x\n",
-	 vla.background.red, vla.background.green, vla.background.blue);
-}
+int vga_ball_fd;
 
 /* Set the background color */
 void set_background_color(const vga_ball_color_t *c)
@@ -35,30 +27,28 @@ void set_background_color(const vga_ball_color_t *c)
   vga_ball_arg_t vla;
   vla.background = *c;
   if (ioctl(vga_ball_fd, VGA_BALL_WRITE_BACKGROUND, &vla)) {
-      perror("ioctl(VGA_BALL_SET_BACKGROUND) failed");
+      perror("ioctl(VGA_BALL_WRITE_BACKGROUND) failed");
+      return;
+  }
+}
+
+/* Set the ball position */
+void set_ball_position(int x, int y)
+{
+  vga_ball_arg_t vla;
+  vla.position.x = x;
+  vla.position.y = y;
+  if (ioctl(vga_ball_fd, VGA_BALL_WRITE_POSITION, &vla)) {
+      perror("ioctl(VGA_BALL_WRITE_POSITION) failed");
       return;
   }
 }
 
 int main()
 {
-  vga_ball_arg_t vla;
-  int i;
   static const char filename[] = "/dev/vga_ball";
-
-  static const vga_ball_color_t colors[] = {
-    { 0xff, 0x00, 0x00 }, /* Red */
-    { 0x00, 0xff, 0x00 }, /* Green */
-    { 0x00, 0x00, 0xff }, /* Blue */
-    { 0xff, 0xff, 0x00 }, /* Yellow */
-    { 0x00, 0xff, 0xff }, /* Cyan */
-    { 0xff, 0x00, 0xff }, /* Magenta */
-    { 0x80, 0x80, 0x80 }, /* Gray */
-    { 0x00, 0x00, 0x00 }, /* Black */
-    { 0xff, 0xff, 0xff }  /* White */
-  };
-
-# define COLORS 9
+  int ball_x = SCREEN_WIDTH / 2, ball_y = SCREEN_HEIGHT / 2;
+  int vel_x = 3, vel_y = 2;
 
   printf("VGA ball Userspace program started\n");
 
@@ -67,15 +57,40 @@ int main()
     return -1;
   }
 
-  printf("initial state: ");
-  print_background_color();
-
-  for (i = 0 ; i < 24 ; i++) {
-    set_background_color(&colors[i % COLORS ]);
-    print_background_color();
-    usleep(400000);
+  /* Set dark blue background */
+  {
+    vga_ball_color_t bg = { 0x00, 0x00, 0x80 };
+    set_background_color(&bg);
   }
-  
+
+  printf("Bouncing ball started. Press Ctrl+C to stop.\n");
+
+  for (;;) {
+    ball_x += vel_x;
+    ball_y += vel_y;
+
+    /* Bounce off left/right walls */
+    if (ball_x - BALL_RADIUS < 0) {
+      ball_x = BALL_RADIUS;
+      vel_x = -vel_x;
+    } else if (ball_x + BALL_RADIUS >= SCREEN_WIDTH) {
+      ball_x = SCREEN_WIDTH - 1 - BALL_RADIUS;
+      vel_x = -vel_x;
+    }
+
+    /* Bounce off top/bottom walls */
+    if (ball_y - BALL_RADIUS < 0) {
+      ball_y = BALL_RADIUS;
+      vel_y = -vel_y;
+    } else if (ball_y + BALL_RADIUS >= SCREEN_HEIGHT) {
+      ball_y = SCREEN_HEIGHT - 1 - BALL_RADIUS;
+      vel_y = -vel_y;
+    }
+
+    set_ball_position(ball_x, ball_y);
+    usleep(16667); /* ~60 fps */
+  }
+
   printf("VGA BALL Userspace program terminating\n");
   return 0;
 }

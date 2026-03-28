@@ -4,12 +4,20 @@
  * Stephen A. Edwards
  * Columbia University
  *
- * Register map:
- * 
- * Byte Offset  7 ... 0   Meaning
- *        0    |  Red  |  Red component of background color (0-255)
- *        1    | Green |  Green component
- *        2    | Blue  |  Blue component
+ * Register map (8-bit writedata, byte addressing):
+ *
+ * Offset  Bits 7..0              Meaning
+ *   0     ball_x[7:0]            Ball center X coordinate (low byte)
+ *   1     {6'b0, ball_x[9:8]}    Ball center X coordinate (high byte)
+ *   2     ball_y[7:0]            Ball center Y coordinate (low byte)
+ *   3     {6'b0, ball_y[9:8]}    Ball center Y coordinate (high byte)
+ *   4     background_r           Red component of background color (0-255)
+ *   5     background_g           Green component of background color (0-255)
+ *   6     background_b           Blue component of background color (0-255)
+ *
+ * Ball is displayed as a white filled circle with radius 20 pixels.
+ * Coordinates are double-buffered: writes go to staging registers,
+ * latched to display registers at vertical blanking to prevent tearing.
  */
 
 module vga_ball(input logic        clk,
@@ -28,32 +36,66 @@ module vga_ball(input logic        clk,
    logic [9:0]     vcount;
 
    logic [7:0]     background_r, background_g, background_b;
-        
+
+   /* Ball position staging registers (written by CPU) */
+   logic [9:0]     stage_ball_x, stage_ball_y;
+
+   /* Ball position display registers (used by pixel logic) */
+   logic [9:0]     disp_ball_x, disp_ball_y;
+
+   localparam BALL_RADIUS_SQ = 400; /* radius = 20 */
+
    vga_counters counters(.clk50(clk), .*);
+
+   /* Latch staging -> display at start of vertical blanking */
+   wire vblank_start = (vcount == 10'd480) && (hcount == 11'd0);
 
    always_ff @(posedge clk)
      if (reset) begin
+        stage_ball_x <= 10'd320;
+        stage_ball_y <= 10'd240;
+        disp_ball_x  <= 10'd320;
+        disp_ball_y  <= 10'd240;
         background_r <= 8'h0;
         background_g <= 8'h0;
         background_b <= 8'h80;
-     end else if (chipselect && write)
-       case (address)
-         3'h0 : background_r <= writedata;
-         3'h1 : background_g <= writedata;
-         3'h2 : background_b <= writedata;
-       endcase
+     end else begin
+        if (chipselect && write)
+          case (address)
+            3'h0 : stage_ball_x[7:0] <= writedata;
+            3'h1 : stage_ball_x[9:8] <= writedata[1:0];
+            3'h2 : stage_ball_y[7:0] <= writedata;
+            3'h3 : stage_ball_y[9:8] <= writedata[1:0];
+            3'h4 : background_r <= writedata;
+            3'h5 : background_g <= writedata;
+            3'h6 : background_b <= writedata;
+          endcase
+        if (vblank_start) begin
+           disp_ball_x <= stage_ball_x;
+           disp_ball_y <= stage_ball_y;
+        end
+     end
+
+   /* Ball distance calculation */
+   logic signed [10:0] dx, dy;
+   logic [21:0] dist_sq;
+
+   always_comb begin
+      dx = $signed({1'b0, hcount[10:1]}) - $signed({1'b0, disp_ball_x});
+      dy = $signed({1'b0, vcount})        - $signed({1'b0, disp_ball_y});
+      dist_sq = dx * dx + dy * dy;
+   end
 
    always_comb begin
       {VGA_R, VGA_G, VGA_B} = {8'h0, 8'h0, 8'h0};
-      if (VGA_BLANK_n )
-        if (hcount[10:6] == 5'd3 &&
-            vcount[9:5] == 5'd3)
+      if (VGA_BLANK_n)
+        if (dist_sq <= BALL_RADIUS_SQ)
           {VGA_R, VGA_G, VGA_B} = {8'hff, 8'hff, 8'hff};
         else
           {VGA_R, VGA_G, VGA_B} =
              {background_r, background_g, background_b};
    end
-               
+
 endmodule
 
 module vga_counters(
@@ -64,12 +106,12 @@ module vga_counters(
 
 /*
  * 640 X 480 VGA timing for a 50 MHz clock: one pixel every other cycle
- * 
+ *
  * HCOUNT 1599 0             1279       1599 0
  *             _______________              ________
  * ___________|    Video      |____________|  Video
- * 
- * 
+ *
+ *
  * |SYNC| BP |<-- HACTIVE -->|FP|SYNC| BP |<-- HACTIVE
  *       _______________________      _____________
  * |____|       VGA_HS          |____|
@@ -78,10 +120,10 @@ module vga_counters(
    parameter HACTIVE      = 11'd 1280,
              HFRONT_PORCH = 11'd 32,
              HSYNC        = 11'd 192,
-             HBACK_PORCH  = 11'd 96,   
+             HBACK_PORCH  = 11'd 96,
              HTOTAL       = HACTIVE + HFRONT_PORCH + HSYNC +
                             HBACK_PORCH; // 1600
-   
+
    // Parameters for vcount
    parameter VACTIVE      = 10'd 480,
              VFRONT_PORCH = 10'd 10,
@@ -91,16 +133,16 @@ module vga_counters(
                             VBACK_PORCH; // 525
 
    logic endOfLine;
-   
+
    always_ff @(posedge clk50 or posedge reset)
      if (reset)          hcount <= 0;
      else if (endOfLine) hcount <= 0;
      else                hcount <= hcount + 11'd 1;
 
    assign endOfLine = hcount == HTOTAL - 1;
-       
+
    logic endOfField;
-   
+
    always_ff @(posedge clk50 or posedge reset)
      if (reset)          vcount <= 0;
      else if (endOfLine)
@@ -116,7 +158,7 @@ module vga_counters(
    assign VGA_VS = !( vcount[9:1] == (VACTIVE + VFRONT_PORCH) / 2);
 
    assign VGA_SYNC_n = 1'b0; // For putting sync on the green signal; unused
-   
+
    // Horizontal active: 0 to 1279     Vertical active: 0 to 479
    // 101 0000 0000  1280              01 1110 0000  480
    // 110 0011 1111  1599              10 0000 1100  524
@@ -126,10 +168,10 @@ module vga_counters(
    /* VGA_CLK is 25 MHz
     *             __    __    __
     * clk50    __|  |__|  |__|
-    *        
+    *
     *             _____       __
     * hcount[0]__|     |_____|
     */
    assign VGA_CLK = hcount[0]; // 25 MHz clock: rising edge sensitive
-   
+
 endmodule
