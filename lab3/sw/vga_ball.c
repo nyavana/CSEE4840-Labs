@@ -35,9 +35,10 @@
 
 #define DRIVER_NAME "vga_ball"
 
-/* Device registers (byte offsets for 16-bit word-addressed interface) */
-#define BALL_X(x) (x)
-#define BALL_Y(x) ((x)+2)
+/* Device registers */
+#define BG_RED(x) (x)
+#define BG_GREEN(x) ((x)+1)
+#define BG_BLUE(x) ((x)+2)
 
 /*
  * Information about our device
@@ -45,17 +46,19 @@
 struct vga_ball_dev {
 	struct resource res; /* Resource: our registers */
 	void __iomem *virtbase; /* Where registers can be accessed in memory */
-	vga_ball_coord_t position;
+        vga_ball_color_t background;
 } dev;
 
 /*
- * Write ball position to hardware registers
+ * Write segments of a single digit
+ * Assumes digit is in range and the device information has been set up
  */
-static void write_position(vga_ball_coord_t *pos)
+static void write_background(vga_ball_color_t *background)
 {
-	iowrite16(pos->x, BALL_X(dev.virtbase) );
-	iowrite16(pos->y, BALL_Y(dev.virtbase) );
-	dev.position = *pos;
+	iowrite8(background->red, BG_RED(dev.virtbase) );
+	iowrite8(background->green, BG_GREEN(dev.virtbase) );
+	iowrite8(background->blue, BG_BLUE(dev.virtbase) );
+	dev.background = *background;
 }
 
 /*
@@ -68,15 +71,15 @@ static long vga_ball_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 	vga_ball_arg_t vla;
 
 	switch (cmd) {
-	case VGA_BALL_SET_POSITION:
+	case VGA_BALL_WRITE_BACKGROUND:
 		if (copy_from_user(&vla, (vga_ball_arg_t *) arg,
 				   sizeof(vga_ball_arg_t)))
 			return -EACCES;
-		write_position(&vla.position);
+		write_background(&vla.background);
 		break;
 
-	case VGA_BALL_GET_POSITION:
-		vla.position = dev.position;
+	case VGA_BALL_READ_BACKGROUND:
+	  	vla.background = dev.background;
 		if (copy_to_user((vga_ball_arg_t *) arg, &vla,
 				 sizeof(vga_ball_arg_t)))
 			return -EACCES;
@@ -108,7 +111,7 @@ static struct miscdevice vga_ball_misc_device = {
  */
 static int __init vga_ball_probe(struct platform_device *pdev)
 {
-        vga_ball_coord_t center = { 320, 240 };
+        vga_ball_color_t beige = { 0xf9, 0xe4, 0xb7 };
 	int ret;
 
 	/* Register ourselves as a misc device: creates /dev/vga_ball */
@@ -135,8 +138,8 @@ static int __init vga_ball_probe(struct platform_device *pdev)
 		goto out_release_mem_region;
 	}
         
-	/* Set initial ball position to center of screen */
-        write_position(&center);
+	/* Set an initial color */
+        write_background(&beige);
 
 	return 0;
 

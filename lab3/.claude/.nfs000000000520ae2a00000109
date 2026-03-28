@@ -21,7 +21,9 @@
       "Bash(make dtb:*)",
       "Bash(source /tools/intel/intelFPGA/20.1/embedded/embedded_command_shell.sh)",
       "Bash(bash -c 'source /tools/intel/intelFPGA/20.1/embedded/embedded_command_shell.sh && which sopc2dts && make dtb' 2>&1)",
-      "Bash(bash -c 'export PATH=/tools/intel/intelFPGA/20.1/embedded/host_tools/altera/device-tree-generator:$PATH && which sopc2dts && make dtb' 2>&1)"
+      "Bash(bash -c 'export PATH=/tools/intel/intelFPGA/20.1/embedded/host_tools/altera/device-tree-generator:$PATH && which sopc2dts && make dtb' 2>&1)",
+      "Bash(make clean:*)",
+      "Bash(verilator --lint-only --sv vga_ball.sv)"
     ]
   }
 }
