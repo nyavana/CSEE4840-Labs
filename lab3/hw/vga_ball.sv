@@ -15,7 +15,8 @@
  *   5     background_g           Green component of background color (0-255)
  *   6     background_b           Blue component of background color (0-255)
  *
- * Ball is displayed as a white filled circle with radius 20 pixels.
+ * Ball is displayed as a white filled circle with radius 20 pixels,
+ * anti-aliased with a 3-pixel smooth edge transition (4 alpha bands).
  * Coordinates are double-buffered: writes go to staging registers,
  * latched to display registers at vertical blanking to prevent tearing.
  */
@@ -43,7 +44,11 @@ module vga_ball(input logic        clk,
    /* Ball position display registers (used by pixel logic) */
    logic [9:0]     disp_ball_x, disp_ball_y;
 
-   localparam BALL_RADIUS_SQ = 400; /* radius = 20 */
+   /* Anti-aliasing thresholds: 4 bands for smooth edge */
+   localparam BALL_R_SQ_INNER  = 324;  /* (R-2)^2 = 18^2: full white */
+   localparam BALL_R_SQ_MID    = 361;  /* (R-1)^2 = 19^2: 75% white */
+   localparam BALL_R_SQ_OUTER  = 400;  /* R^2     = 20^2: 50% white */
+   localparam BALL_R_SQ_FRINGE = 441;  /* (R+1)^2 = 21^2: 25% white */
 
    vga_counters counters(.clk50(clk), .*);
 
@@ -86,14 +91,42 @@ module vga_ball(input logic        clk,
       dist_sq = dx * dx + dy * dy;
    end
 
+   /* Diff signals for alpha blending (ball is white 0xFF) */
+   logic [7:0] diff_r, diff_g, diff_b;
+   assign diff_r = 8'hFF - background_r;
+   assign diff_g = 8'hFF - background_g;
+   assign diff_b = 8'hFF - background_b;
+
    always_comb begin
       {VGA_R, VGA_G, VGA_B} = {8'h0, 8'h0, 8'h0};
-      if (VGA_BLANK_n)
-        if (dist_sq <= BALL_RADIUS_SQ)
-          {VGA_R, VGA_G, VGA_B} = {8'hff, 8'hff, 8'hff};
+      if (VGA_BLANK_n) begin
+        if (dist_sq <= BALL_R_SQ_INNER)
+          /* Core: full white */
+          {VGA_R, VGA_G, VGA_B} = {8'hFF, 8'hFF, 8'hFF};
+        else if (dist_sq <= BALL_R_SQ_MID)
+          /* 75% ball + 25% background */
+          {VGA_R, VGA_G, VGA_B} = {
+            background_r + (diff_r >> 1) + (diff_r >> 2),
+            background_g + (diff_g >> 1) + (diff_g >> 2),
+            background_b + (diff_b >> 1) + (diff_b >> 2)
+          };
+        else if (dist_sq <= BALL_R_SQ_OUTER)
+          /* 50% ball + 50% background */
+          {VGA_R, VGA_G, VGA_B} = {
+            background_r + (diff_r >> 1),
+            background_g + (diff_g >> 1),
+            background_b + (diff_b >> 1)
+          };
+        else if (dist_sq <= BALL_R_SQ_FRINGE)
+          /* 25% ball + 75% background */
+          {VGA_R, VGA_G, VGA_B} = {
+            background_r + (diff_r >> 2),
+            background_g + (diff_g >> 2),
+            background_b + (diff_b >> 2)
+          };
         else
-          {VGA_R, VGA_G, VGA_B} =
-             {background_r, background_g, background_b};
+          {VGA_R, VGA_G, VGA_B} = {background_r, background_g, background_b};
+      end
    end
 
 endmodule
